@@ -511,7 +511,7 @@ function updateBadge(){
 /* ==================== DASHBOARD ==================== */
 let chartTrend, chartBreakdown;
 function renderDashboard(){
-  const { totalConti } = computeTotals();
+  const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
   const totalFisseMensili = db.fisse.reduce((s,a)=> s + (a.frequency==='annuale' ? a.amount/12 : a.amount), 0);
   const acquistiPending = db.acquisti.filter(a=>!a.bought);
   const acquistiPendingTotal = acquistiPending.reduce((s,a)=>s+Number(a.price||0)*Number(a.qty||1),0);
@@ -588,6 +588,21 @@ function renderDashboard(){
       </div>
 
       <div class="mobile-dash-sheet">
+        <div class="grid grid-3" style="margin-bottom:20px;">
+          <div class="card">
+            <div class="card-title">Preventivato</div>
+            <div class="stat-value" style="color:var(--blue); font-size:17px;">${euro(totalPrev)}</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Mancante</div>
+            <div class="stat-value" style="color:var(--coral); font-size:17px;">${euro(totalMancanti)}</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Totale generale</div>
+            <div class="stat-value" style="font-size:17px;">${euro(totaleGenerale)}</div>
+          </div>
+        </div>
+
         <div class="spend-summary">
           <div class="spend-summary-text">
             <div class="spend-summary-label">Spesa questo mese</div>
@@ -595,6 +610,24 @@ function renderDashboard(){
           </div>
           <div class="spend-summary-icons">
             ${categorieTop.length ? categorieTop.map(c=>`<div class="spend-summary-icon" style="background:${c.color};" title="${esc(c.label)}: ${euro(speseCategoria[c.key])}">${esc(c.label.charAt(0))}</div>`).join('') : `<div class="spend-summary-icon" style="background:var(--surface-2); color:var(--text-faint);">—</div>`}
+          </div>
+        </div>
+
+        <div class="grid grid-3" style="margin-bottom:20px;">
+          <div class="card">
+            <div class="card-title">Spese fisse mensili</div>
+            <div class="stat-value" style="color:var(--amber); font-size:17px;">${euro(totalFisseMensili)}</div>
+            <div class="row-sub" style="margin-top:4px;">${db.fisse.length} voci</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Obiettivi attivi</div>
+            <div class="stat-value" style="font-size:17px;">${db.obiettivi.length}</div>
+            <div class="row-sub" style="margin-top:4px;">${obiettiviTop.length? Math.round((obiettiviTop.reduce((s,o)=>s+(o.target?o.current/o.target:0),0)/obiettiviTop.length)*100)+'% medio' : 'nessuno'}</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Lista acquisti</div>
+            <div class="stat-value" style="font-size:17px;">${euro(acquistiPendingTotal)}</div>
+            <div class="row-sub" style="margin-top:4px;">${acquistiPending.length} da comprare</div>
           </div>
         </div>
 

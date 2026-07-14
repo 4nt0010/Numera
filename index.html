@@ -720,13 +720,15 @@ input,select{ font-family:inherit; }
   /* nasconde la barra KPI fissa in alto quando siamo sulla Dashboard: la sostituisce la hero-balance-card */
   .main:has(#page-dashboard.active) .kpi-bar{ display:none; }
   .main.dash-active .kpi-bar{ display:none; }
+  .main:has(#page-dashboard.active) .main-inner{ padding:0; }
+  .main.dash-active .main-inner{ padding:0; }
 
   /* ===== Dashboard mobile: bolla piena in alto + un unico foglio sotto, stile app bancaria ===== */
   .mobile-dash-hero{
     position:relative; overflow:hidden;
     background:linear-gradient(160deg, rgba(28,48,36,0.98), rgba(6,14,10,1));
-    margin:-14px -14px 0 -14px;
-    padding:calc(22px + env(safe-area-inset-top)) 20px 46px;
+    margin:0; padding:14px 20px 46px;
+    padding-top:calc(14px + env(safe-area-inset-top));
     color:#F5F8F6;
   }
   .mobile-dash-hero::after{
@@ -750,7 +752,7 @@ input,select{ font-family:inherit; }
   .mobile-dash-sheet{
     position:relative; z-index:2;
     background:#F6F9F7;
-    margin:-24px -14px 0 -14px;
+    margin:-24px 0 0 0;
     border-radius:26px 26px 0 0;
     padding:22px 14px 110px;
     min-height:55vh;
@@ -1035,11 +1037,11 @@ input,select{ font-family:inherit; }
     </button>
     <button class="bn-item" data-page="preventivati">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-      Eventi
+      Preventivati
     </button>
-    <button class="bn-item" data-page="obiettivi">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
-      Obiettivi
+    <button class="bn-item" data-page="mancanti">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+      Mancanti
     </button>
     <button class="bn-item" id="bn-menu-btn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
