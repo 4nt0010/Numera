@@ -5,37 +5,46 @@
    - db.*           -> collections Firestore per utente
 ================================================================ */
 
-const CURRENT_USER_KEY = 'numera_current_user'; // solo un puntatore locale a "chi è loggato su questo dispositivo"
+const ICON_COLORS = ['#30D158','#0A84FF','#FF9F0A','#FF453A','#BF5AF2','#64D2FF'];
 
-const ICON_COLORS = ['#3DDC97','#6C8EFF','#F5B94D','#FF6B6B','#B27CFF','#4FD1E8'];
-
-/* ---------- Firebase / Firestore ---------- */
+/* ---------- Firebase / Firestore / Auth ---------- */
 // window._fb e window._fbReady sono impostati dallo script di init in index.html
-const { db: firestoreDB, doc, getDoc, setDoc } = window._fb;
+const {
+  db: firestoreDB, doc, getDoc, setDoc, auth,
+  createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  signOut, updateProfile, sendPasswordResetEmail
+} = window._fb;
 
-function userRef(collection, username){
-  return doc(firestoreDB, collection, username.toLowerCase());
+function userRef(collection, uid){
+  return doc(firestoreDB, collection, uid);
 }
-async function fbGetUser(username){
-  const snap = await getDoc(userRef('numera_users', username));
-  return snap.exists() ? snap.data() : null;
-}
-async function fbCreateUser(username, password, name){
-  await setDoc(userRef('numera_users', username), { username, password, name });
-}
-async function fbLoadDB(username){
-  const snap = await getDoc(userRef('numera_data', username));
+async function fbLoadDB(uid){
+  const snap = await getDoc(userRef('numera_data', uid));
   return snap.exists() ? snap.data() : seedDB();
 }
-async function fbLoadSnapshots(username){
-  const snap = await getDoc(userRef('numera_snapshots', username));
+async function fbLoadSnapshots(uid){
+  const snap = await getDoc(userRef('numera_snapshots', uid));
   return snap.exists() ? (snap.data().list || []) : [];
 }
-async function fbPersist(username, dbData, snaps){
+async function fbPersist(uid, dbData, snaps){
   await Promise.all([
-    setDoc(userRef('numera_data', username), dbData),
-    setDoc(userRef('numera_snapshots', username), { list: snaps })
+    setDoc(userRef('numera_data', uid), dbData),
+    setDoc(userRef('numera_snapshots', uid), { list: snaps })
   ]);
+}
+
+function friendlyAuthError(code){
+  const map = {
+    'auth/invalid-email': 'Email non valida.',
+    'auth/user-not-found': 'Nessun account con questa email.',
+    'auth/wrong-password': 'Password errata.',
+    'auth/invalid-credential': 'Email o password non corretti.',
+    'auth/email-already-in-use': 'Esiste già un account con questa email.',
+    'auth/weak-password': 'La password deve avere almeno 6 caratteri.',
+    'auth/too-many-requests': 'Troppi tentativi. Riprova tra qualche minuto.',
+    'auth/network-request-failed': 'Errore di connessione. Controlla la rete.',
+  };
+  return map[code] || 'Si è verificato un errore. Riprova.';
 }
 
 /* ---------- stato iniziale vuoto per ogni nuovo utente ---------- */
@@ -61,9 +70,6 @@ let db = null;
 let session = null;
 let snapshots = [];
 
-function getCurrentUsername(){ return localStorage.getItem(CURRENT_USER_KEY); }
-function setCurrentUsername(u){ if(u) localStorage.setItem(CURRENT_USER_KEY, u); else localStorage.removeItem(CURRENT_USER_KEY); }
-
 function saveDB(){
   if(!session) return;
   const today = new Date().toISOString().slice(0,10);
@@ -71,7 +77,7 @@ function saveDB(){
   const idx = snapshots.findIndex(s=>s.date===today);
   if(idx>=0) snapshots[idx].total = total; else snapshots.push({date:today, total});
   snapshots = snapshots.slice(-120);
-  fbPersist(session.username, db, snapshots).catch(err=>{
+  fbPersist(session.uid, db, snapshots).catch(err=>{
     console.error('Errore salvataggio Firebase:', err);
     toast('Errore di salvataggio su Firebase.');
   });
@@ -86,9 +92,10 @@ document.getElementById('toggle-link').addEventListener('click', (e)=>{
   authMode = authMode==='login' ? 'register' : 'login';
   const isReg = authMode==='register';
   document.getElementById('field-name').style.display = isReg ? 'block' : 'none';
+  document.getElementById('login-forgot').style.display = isReg ? 'none' : 'block';
   document.getElementById('login-heading').textContent = isReg ? 'Crea account' : 'Bentornato';
   document.getElementById('login-sub').textContent = isReg
-    ? 'Un username e una password per proteggere i tuoi dati finanziari.'
+    ? 'Registrati con la tua email per proteggere e sincronizzare i tuoi dati finanziari.'
     : 'Accedi al tuo cockpit finanziario per gestire eventi, conti e obiettivi.';
   document.getElementById('login-submit').textContent = isReg ? 'Crea account' : 'Accedi';
   document.getElementById('login-toggle').innerHTML = isReg
@@ -98,9 +105,25 @@ document.getElementById('toggle-link').addEventListener('click', (e)=>{
   document.getElementById('login-error').style.display='none';
 });
 
+document.getElementById('forgot-link').addEventListener('click', async (e)=>{
+  e.preventDefault();
+  const errBox = document.getElementById('login-error');
+  const email = document.getElementById('login-email').value.trim();
+  if(!email){ errBox.textContent='Inserisci la tua email qui sopra, poi clicca di nuovo.'; errBox.style.display='block'; return; }
+  try{
+    await sendPasswordResetEmail(auth, email);
+    errBox.style.display='none';
+    toast('Email di ripristino inviata, controlla la posta.');
+  }catch(err){
+    console.error(err);
+    errBox.textContent = friendlyAuthError(err.code);
+    errBox.style.display='block';
+  }
+});
+
 document.getElementById('login-form').addEventListener('submit', async (e)=>{
   e.preventDefault();
-  const username = document.getElementById('login-username').value.trim();
+  const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value;
   const errBox = document.getElementById('login-error');
   errBox.style.display='none';
@@ -110,26 +133,22 @@ document.getElementById('login-form').addEventListener('submit', async (e)=>{
   submitBtn.disabled = true; submitBtn.textContent = 'Attendere…';
 
   try{
-    await window._fbReady;
-
     if(authMode==='register'){
-      const name = document.getElementById('reg-name').value.trim() || username;
-      if(!username || !password){ return showErr('Inserisci username e password.'); }
-      if(password.length < 4){ return showErr('La password deve avere almeno 4 caratteri.'); }
-      const existing = await fbGetUser(username);
-      if(existing){ return showErr('Username già esistente.'); }
-      await fbCreateUser(username, password, name);
-      setCurrentUsername(username);
-      await startSession(name, username);
+      const name = document.getElementById('reg-name').value.trim();
+      if(!name || !email || !password){ return showErr('Compila nome, email e password.'); }
+      if(password.length < 6){ return showErr('La password deve avere almeno 6 caratteri.'); }
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      await updateProfile(cred.user, { displayName: name });
+      await startSession(name, cred.user.uid);
     } else {
-      const user = await fbGetUser(username);
-      if(!user || user.password !== password){ return showErr('Username o password non corretti.'); }
-      setCurrentUsername(username);
-      await startSession(user.name, user.username);
+      if(!email || !password){ return showErr('Inserisci email e password.'); }
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+      const name = cred.user.displayName || cred.user.email.split('@')[0];
+      await startSession(name, cred.user.uid);
     }
   } catch(err){
     console.error(err);
-    showErr('Errore di connessione a Firebase. Riprova.');
+    showErr(friendlyAuthError(err.code));
   } finally {
     submitBtn.disabled = false; submitBtn.textContent = prevLabel;
   }
@@ -137,18 +156,18 @@ document.getElementById('login-form').addEventListener('submit', async (e)=>{
   function showErr(msg){ errBox.textContent = msg; errBox.style.display='block'; }
 });
 
-document.getElementById('logout-btn').addEventListener('click', ()=>{
-  setCurrentUsername(null);
+document.getElementById('logout-btn').addEventListener('click', async ()=>{
+  await signOut(auth).catch(()=>{});
   session = null;
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-screen').style.display='flex';
   document.getElementById('login-form').reset();
 });
 
-async function startSession(name, username){
-  session = { name, username };
-  db = await fbLoadDB(username);
-  snapshots = await fbLoadSnapshots(username);
+async function startSession(name, uid){
+  session = { name, uid };
+  db = await fbLoadDB(uid);
+  snapshots = await fbLoadSnapshots(uid);
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').classList.add('active');
   document.getElementById('user-name-display').textContent = name;
@@ -157,26 +176,64 @@ async function startSession(name, username){
   renderAll();
 }
 
-/* auto-login if a session pointer exists su questo dispositivo */
+/* auto-login: se Firebase Auth ha già un utente valido (sessione persistente) */
 (async function initAuth(){
-  await window._fbReady;
-  const username = getCurrentUsername();
-  if(username){
-    const user = await fbGetUser(username);
-    if(user){ await startSession(user.name, user.username); }
-    else setCurrentUsername(null);
+  const user = await window._fbReady;
+  if(user){
+    const name = user.displayName || (user.email ? user.email.split('@')[0] : 'Utente');
+    await startSession(name, user.uid);
   }
 })();
 
 /* ==================== NAV ==================== */
+function goToPage(pageKey){
+  document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active'));
+  document.querySelectorAll('.bn-item[data-page]').forEach(i=>i.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  const navItem = document.querySelector(`.nav-item[data-page="${pageKey}"]`);
+  const bnItem = document.querySelector(`.bn-item[data-page="${pageKey}"]`);
+  if(navItem) navItem.classList.add('active');
+  if(bnItem) bnItem.classList.add('active');
+  document.getElementById('page-'+pageKey).classList.add('active');
+  document.getElementById('main-scroll-target')?.scrollTo?.(0,0);
+  closeSidebar();
+}
 document.querySelectorAll('.nav-item').forEach(item=>{
-  item.addEventListener('click', ()=>{
-    document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active'));
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    item.classList.add('active');
-    document.getElementById('page-'+item.dataset.page).classList.add('active');
-  });
+  item.addEventListener('click', ()=> goToPage(item.dataset.page));
 });
+document.querySelectorAll('.bn-item[data-page]').forEach(item=>{
+  item.addEventListener('click', ()=> goToPage(item.dataset.page));
+});
+
+/* ==================== MOBILE DRAWER ==================== */
+function openSidebar(){
+  document.querySelector('.sidebar').classList.add('open');
+  document.getElementById('sidebar-overlay').classList.add('active');
+}
+function closeSidebar(){
+  document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('active');
+}
+document.getElementById('mobile-menu-btn').addEventListener('click', openSidebar);
+document.getElementById('bn-menu-btn').addEventListener('click', openSidebar);
+document.getElementById('sidebar-close-btn').addEventListener('click', closeSidebar);
+document.getElementById('sidebar-overlay').addEventListener('click', closeSidebar);
+
+/* ==================== KPI BAR (dati principali sempre visibili) ==================== */
+function computeTotals(){
+  const totalConti = db.accounts.reduce((s,a)=>s+Number(a.balance||0),0);
+  const totalPrev = db.preventivati.reduce((s,a)=>s+Number(a.amount||0),0);
+  const totalMancanti = db.mancanti.reduce((s,a)=>s+Number(a.amount||0),0);
+  const totaleGenerale = totalConti + totalPrev + totalMancanti;
+  return { totalConti, totalPrev, totalMancanti, totaleGenerale };
+}
+function renderKpiBar(){
+  const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
+  document.getElementById('kpi-attuale').textContent = euro(totalConti);
+  document.getElementById('kpi-preventivato').textContent = euro(totalPrev);
+  document.getElementById('kpi-mancante').textContent = euro(totalMancanti);
+  document.getElementById('kpi-totale').textContent = euro(totaleGenerale);
+}
 
 /* ==================== TOAST ==================== */
 let toastTimer;
@@ -197,7 +254,7 @@ overlay.addEventListener('click', (e)=>{ if(e.target===overlay) closeModal(); })
 
 /* ==================== RENDER ALL ==================== */
 function renderAll(){
-  const renderers = [renderDashboard, renderConti, renderPreventivati, renderMancanti, renderFisse, renderObiettivi, renderAcquisti, renderContatti];
+  const renderers = [renderKpiBar, renderDashboard, renderConti, renderPreventivati, renderMancanti, renderFisse, renderObiettivi, renderAcquisti, renderContatti];
   renderers.forEach(fn=>{
     try{ fn(); }
     catch(err){ console.error(`Errore in ${fn.name}:`, err); }
@@ -213,12 +270,14 @@ function updateBadge(){
 /* ==================== DASHBOARD ==================== */
 let chartTrend, chartBreakdown;
 function renderDashboard(){
-  const totalConti = db.accounts.reduce((s,a)=>s+Number(a.balance),0);
-  const totalPrev = db.preventivati.reduce((s,a)=>s+Number(a.amount),0);
-  const totalMancanti = db.mancanti.reduce((s,a)=>s+Number(a.amount),0);
+  const { totalConti } = computeTotals();
   const totalFisseMensili = db.fisse.reduce((s,a)=> s + (a.frequency==='annuale' ? a.amount/12 : a.amount), 0);
-  const subtotale = totalPrev + totalMancanti;
-  const totaleGenerale = totalConti + subtotale;
+  const acquistiPending = db.acquisti.filter(a=>!a.bought);
+  const acquistiPendingTotal = acquistiPending.reduce((s,a)=>s+Number(a.price||0),0);
+  const obiettiviTop = [...db.obiettivi].sort((a,b)=>{
+    const pa = a.target? a.current/a.target : 0, pb = b.target? b.current/b.target : 0;
+    return pb-pa;
+  }).slice(0,3);
 
   const snaps = getSnapshots();
   let trendPct = null, trendAbs = null;
@@ -236,33 +295,43 @@ function renderDashboard(){
     <div class="topbar">
       <div>
         <div class="page-title">Dashboard</div>
-        <div class="page-sub">Panoramica generale del tuo denaro, ${session.name}.</div>
+        <div class="page-sub">Panoramica generale del tuo denaro, ${esc(session.name)}.</div>
       </div>
+      ${trendPct!==null ? `<div class="stat-trend ${trendAbs>=0?'up':'down'}" style="font-size:13px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
+        ${trendAbs>=0?'+':''}${trendPct.toFixed(1)}% negli ultimi 30gg
+      </div>` : ''}
     </div>
 
-    <div class="grid grid-4">
+    <div class="quick-actions">
+      <button class="qa-btn" onclick="modalAccount()"><span class="qa-icon" style="background:var(--mint-dim); color:var(--mint);">+</span>Conto</button>
+      <button class="qa-btn" onclick="modalPreventivato()"><span class="qa-icon" style="background:var(--blue-dim); color:var(--blue);">+</span>Evento</button>
+      <button class="qa-btn" onclick="modalMancante()"><span class="qa-icon" style="background:var(--coral-dim); color:var(--coral);">+</span>Mancante</button>
+      <button class="qa-btn" onclick="modalFissa()"><span class="qa-icon" style="background:var(--amber-dim); color:var(--amber);">+</span>Spesa fissa</button>
+      <button class="qa-btn" onclick="modalObiettivo()"><span class="qa-icon" style="background:rgba(178,124,255,0.14); color:#B27CFF;">+</span>Obiettivo</button>
+      <button class="qa-btn" onclick="modalAcquisto()"><span class="qa-icon" style="background:rgba(79,209,232,0.14); color:#4FD1E8;">+</span>Acquisto</button>
+    </div>
+
+    <div class="grid grid-4" style="margin-top:18px;">
       <div class="card">
-        <div class="card-title">Denaro attuale</div>
-        <div class="stat-value" style="color:var(--mint)">${euro(totalConti)}</div>
-        ${trendPct!==null ? `<div class="stat-trend ${trendAbs>=0?'up':'down'}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
-          ${trendAbs>=0?'+':''}${trendPct.toFixed(1)}% (30gg)
-        </div>` : `<div class="stat-trend" style="color:var(--text-faint)">Dati insufficienti (30gg)</div>`}
+        <div class="card-title">Spese fisse mensili</div>
+        <div class="stat-value" style="color:var(--amber); font-size:20px;">${euro(totalFisseMensili)}</div>
+        <div class="stat-trend" style="color:var(--text-faint)">${db.fisse.length} voci ricorrenti</div>
       </div>
       <div class="card">
-        <div class="card-title">Preventivato</div>
-        <div class="stat-value" style="color:var(--blue)">${euro(totalPrev)}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">${db.preventivati.length} eventi in arrivo</div>
+        <div class="card-title">Obiettivi attivi</div>
+        <div class="stat-value" style="font-size:20px;">${db.obiettivi.length}</div>
+        <div class="stat-trend" style="color:var(--text-faint)">${obiettiviTop.length? Math.round((obiettiviTop.reduce((s,o)=>s+(o.target?o.current/o.target:0),0)/obiettiviTop.length)*100)+'% medio raggiunto' : 'Nessun obiettivo ancora'}</div>
       </div>
       <div class="card">
-        <div class="card-title">Mancante</div>
-        <div class="stat-value" style="color:var(--coral)">${euro(totalMancanti)}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">${db.mancanti.length} da incassare</div>
+        <div class="card-title">Lista acquisti</div>
+        <div class="stat-value" style="font-size:20px;">${euro(acquistiPendingTotal)}</div>
+        <div class="stat-trend" style="color:var(--text-faint)">${acquistiPending.length} da comprare</div>
       </div>
       <div class="card">
-        <div class="card-title">Totale generale</div>
-        <div class="stat-value">${euro(totaleGenerale)}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">Attuale + preventivato + mancante</div>
+        <div class="card-title">Contatti</div>
+        <div class="stat-value" style="font-size:20px;">${db.contatti.length}</div>
+        <div class="stat-trend" style="color:var(--text-faint)">collegati ai tuoi eventi</div>
       </div>
     </div>
 
@@ -293,6 +362,19 @@ function renderDashboard(){
         </div>`;
       }).join('') : emptyState('Nessuna scadenza imminente.')}
     </div>
+
+    <div class="section-title">Obiettivi in evidenza <span class="count">${db.obiettivi.length}</span></div>
+    <div class="grid grid-3">
+      ${obiettiviTop.length ? obiettiviTop.map(o=>{
+        const pct = Math.min(100, (o.current/o.target*100)||0);
+        return `<div class="card">
+          <div class="card-title">${esc(o.name)}</div>
+          <div class="stat-value" style="margin-top:6px; font-size:18px;">${euro(o.current)} <span style="color:var(--text-faint); font-size:12.5px; font-weight:500;">/ ${euro(o.target)}</span></div>
+          <div class="progress-track"><div class="progress-fill" style="width:${pct}%; background:${o.color};"></div></div>
+          <div class="row-sub" style="margin-top:8px;">${pct.toFixed(0)}% raggiunto</div>
+        </div>`;
+      }).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun obiettivo. Creane uno per iniziare a risparmiare.')}</div>`}
+    </div>
   `;
 
   drawTrendChart(snaps);
@@ -310,16 +392,16 @@ function drawTrendChart(snaps){
       labels: data.map(s=>fmtDate(s.date)),
       datasets:[{
         data: data.map(s=>s.total),
-        borderColor:'#3DDC97', backgroundColor:'rgba(61,220,151,0.12)',
-        fill:true, tension:0.35, pointRadius:0, borderWidth:2.5,
+        borderColor:'#30D158', backgroundColor:'rgba(48,209,88,0.14)',
+        fill:true, tension:0.4, pointRadius:0, borderWidth:2.5,
       }]
     },
     options:{
       responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c=> euro(c.raw) } } },
       scales:{
-        x:{ grid:{display:false}, ticks:{ color:'#565E73', font:{size:10} } },
-        y:{ grid:{color:'#1A1F2C'}, ticks:{ color:'#565E73', font:{size:10}, callback:v=>'€'+v } }
+        x:{ grid:{display:false}, ticks:{ color:'#5D7169', font:{size:10} } },
+        y:{ grid:{color:'rgba(255,255,255,0.06)'}, ticks:{ color:'#5D7169', font:{size:10}, callback:v=>'€'+v } }
       }
     }
   });
@@ -332,11 +414,11 @@ function drawBreakdownChart(){
     type:'doughnut',
     data:{
       labels: db.accounts.map(a=>a.name),
-      datasets:[{ data: db.accounts.map(a=>Number(a.balance)), backgroundColor: db.accounts.map(a=>a.color), borderWidth:0 }]
+      datasets:[{ data: db.accounts.map(a=>Number(a.balance)), backgroundColor: db.accounts.map(a=>a.color), borderWidth:3, borderColor:'#04100a', borderRadius:6 }]
     },
     options:{
-      responsive:true, maintainAspectRatio:false, cutout:'68%',
-      plugins:{ legend:{ position:'bottom', labels:{ color:'#8891A5', font:{size:11}, padding:12, boxWidth:8 } },
+      responsive:true, maintainAspectRatio:false, cutout:'70%',
+      plugins:{ legend:{ position:'bottom', labels:{ color:'#9BB0A6', font:{size:11}, padding:12, boxWidth:8 } },
         tooltip:{ callbacks:{ label: c=> `${c.label}: ${euro(c.raw)}` } } }
     }
   });
