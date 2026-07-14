@@ -197,14 +197,11 @@ overlay.addEventListener('click', (e)=>{ if(e.target===overlay) closeModal(); })
 
 /* ==================== RENDER ALL ==================== */
 function renderAll(){
-  renderDashboard();
-  renderConti();
-  renderPreventivati();
-  renderMancanti();
-  renderFisse();
-  renderObiettivi();
-  renderAcquisti();
-  renderContatti();
+  const renderers = [renderDashboard, renderConti, renderPreventivati, renderMancanti, renderFisse, renderObiettivi, renderAcquisti, renderContatti];
+  renderers.forEach(fn=>{
+    try{ fn(); }
+    catch(err){ console.error(`Errore in ${fn.name}:`, err); }
+  });
   updateBadge();
 }
 function updateBadge(){
@@ -304,7 +301,7 @@ function renderDashboard(){
 
 function drawTrendChart(snaps){
   const ctx = document.getElementById('chart-trend');
-  if(!ctx) return;
+  if(!ctx || typeof Chart === 'undefined') return;
   if(chartTrend) chartTrend.destroy();
   const data = snaps.length ? snaps : [{date:new Date().toISOString().slice(0,10), total: db.accounts.reduce((s,a)=>s+Number(a.balance),0)}];
   chartTrend = new Chart(ctx, {
@@ -329,7 +326,7 @@ function drawTrendChart(snaps){
 }
 function drawBreakdownChart(){
   const ctx = document.getElementById('chart-breakdown');
-  if(!ctx) return;
+  if(!ctx || typeof Chart === 'undefined') return;
   if(chartBreakdown) chartBreakdown.destroy();
   chartBreakdown = new Chart(ctx, {
     type:'doughnut',
