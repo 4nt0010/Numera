@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NUMERA — Cockpit Finanziario</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg: #0B0E14;
+  --surface: #11151F;
+  --surface-2: #171C29;
+  --border: #232837;
+  --border-soft: #1A1F2C;
+  --text: #E8EAF0;
+  --text-dim: #8891A5;
+  --text-faint: #565E73;
+  --mint: #3DDC97;
+  --mint-dim: rgba(61,220,151,0.12);
+  --coral: #FF6B6B;
+  --coral-dim: rgba(255,107,107,0.12);
+  --blue: #6C8EFF;
+  --blue-dim: rgba(108,142,255,0.12);
+  --amber: #F5B94D;
+  --amber-dim: rgba(245,185,77,0.12);
+  --radius: 14px;
+  --radius-sm: 9px;
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{height:100%;}
+body{
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(108,142,255,0.08), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(61,220,151,0.06), transparent 60%),
+    var(--bg);
+  color:var(--text);
+  font-family:var(--font-body);
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{ background:var(--blue-dim); color:var(--text); }
+button{ font-family:inherit; cursor:pointer; }
+input,select{ font-family:inherit; }
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-track{ background:transparent; }
+::-webkit-scrollbar-thumb{ background:var(--border); border-radius:10px; }
+::-webkit-scrollbar-thumb:hover{ background:#2c3345; }
+
+/* ===== LOGIN ===== */
+#login-screen{
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+}
+.login-card{
+  width:100%;
+  max-width:380px;
+  background:linear-gradient(180deg, var(--surface-2), var(--surface));
+  border:1px solid var(--border);
+  border-radius:20px;
+  padding:40px 32px;
+  box-shadow: 0 30px 80px -20px rgba(0,0,0,0.6);
+  position:relative;
+  overflow:hidden;
+}
+.login-card::before{
+  content:'';
+  position:absolute; top:0; left:0; right:0; height:2px;
+  background:linear-gradient(90deg, transparent, var(--mint), var(--blue), transparent);
+}
+.login-brand{
+  display:flex; align-items:center; gap:10px; margin-bottom:6px;
+}
+.login-brand .dot{
+  width:10px; height:10px; border-radius:50%;
+  background:var(--mint);
+  box-shadow:0 0 12px var(--mint);
+}
+.login-brand span{
+  font-family:var(--font-display); font-weight:700; font-size:15px;
+  letter-spacing:0.16em; color:var(--text-dim); text-transform:uppercase;
+}
+.login-card h1{
+  font-family:var(--font-display);
+  font-size:28px; font-weight:600;
+  margin:14px 0 6px;
+  letter-spacing:-0.01em;
+}
+.login-card p.sub{
+  color:var(--text-dim); font-size:13.5px; margin-bottom:28px; line-height:1.5;
+}
+.field{ margin-bottom:16px; }
+.field label{
+  display:block; font-size:12px; color:var(--text-dim);
+  margin-bottom:7px; font-weight:500; letter-spacing:0.02em;
+}
+.field input{
+  width:100%; background:var(--bg); border:1px solid var(--border);
+  border-radius:10px; padding:12px 14px; color:var(--text);
+  font-size:14.5px; outline:none; transition:border-color .15s, box-shadow .15s;
+}
+.field input:focus{
+  border-color:var(--blue);
+  box-shadow:0 0 0 3px var(--blue-dim);
+}
+.login-btn{
+  width:100%; padding:13px; border:none; border-radius:10px;
+  background:var(--mint); color:#06140D; font-weight:600; font-size:14.5px;
+  margin-top:8px; transition:transform .12s, box-shadow .12s;
+  font-family:var(--font-display);
+}
+.login-btn:hover{ transform:translateY(-1px); box-shadow:0 8px 24px -8px rgba(61,220,151,0.5); }
+.login-toggle{
+  text-align:center; margin-top:20px; font-size:13px; color:var(--text-dim);
+}
+.login-toggle a{ color:var(--blue); text-decoration:none; font-weight:500; }
+.login-note{
+  margin-top:22px; padding:12px 14px; background:var(--surface); border:1px solid var(--border-soft);
+  border-radius:10px; font-size:11.5px; color:var(--text-faint); line-height:1.5;
+}
+.login-error{
+  background:var(--coral-dim); border:1px solid rgba(255,107,107,0.3); color:var(--coral);
+  padding:10px 12px; border-radius:8px; font-size:12.5px; margin-bottom:16px; display:none;
+}
+
+/* ===== APP SHELL ===== */
+#app{ display:none; min-height:100vh; }
+#app.active{ display:flex; }
+
+.sidebar{
+  width:236px; flex-shrink:0;
+  background:var(--surface);
+  border-right:1px solid var(--border-soft);
+  display:flex; flex-direction:column;
+  height:100vh; position:sticky; top:0;
+  padding:22px 14px;
+}
+.brand{ display:flex; align-items:center; gap:10px; padding:6px 10px 26px; }
+.brand .dot{ width:9px; height:9px; border-radius:50%; background:var(--mint); box-shadow:0 0 10px var(--mint); }
+.brand span{ font-family:var(--font-display); font-weight:700; font-size:15px; letter-spacing:0.14em; }
+
+.nav-group{ margin-bottom:18px; }
+.nav-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-faint); padding:0 10px 8px; font-weight:600; }
+.nav-item{
+  display:flex; align-items:center; gap:11px;
+  padding:9px 10px; border-radius:9px; color:var(--text-dim);
+  font-size:13.5px; font-weight:500; cursor:pointer; text-decoration:none;
+  transition:background .12s, color .12s; margin-bottom:2px;
+}
+.nav-item svg{ width:17px; height:17px; flex-shrink:0; opacity:0.85; }
+.nav-item:hover{ background:var(--surface-2); color:var(--text); }
+.nav-item.active{ background:var(--blue-dim); color:var(--text); }
+.nav-item.active svg{ opacity:1; color:var(--blue); }
+.nav-badge{
+  margin-left:auto; font-family:var(--font-mono); font-size:10px;
+  background:var(--coral-dim); color:var(--coral); padding:1px 6px; border-radius:20px;
+}
+
+.sidebar-footer{ margin-top:auto; padding-top:14px; border-top:1px solid var(--border-soft); }
+.user-chip{
+  display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:9px;
+  cursor:pointer; transition:background .12s;
+}
+.user-chip:hover{ background:var(--surface-2); }
+.user-avatar{
+  width:28px; height:28px; border-radius:50%; background:linear-gradient(135deg, var(--blue), var(--mint));
+  display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#06140D;
+  flex-shrink:0;
+}
+.user-info{ overflow:hidden; }
+.user-name{ font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.user-role{ font-size:10.5px; color:var(--text-faint); }
+.logout-btn{
+  margin-left:auto; background:none; border:none; color:var(--text-faint); padding:4px;
+}
+.logout-btn:hover{ color:var(--coral); }
+
+.main{ flex:1; min-width:0; padding:26px 32px 60px; max-width:1400px; }
+.topbar{ display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; }
+.page-title{ font-family:var(--font-display); font-size:23px; font-weight:600; letter-spacing:-0.01em; }
+.page-sub{ color:var(--text-dim); font-size:13px; margin-top:3px; }
+.topbar-actions{ display:flex; gap:10px; align-items:center; }
+
+.btn{
+  display:inline-flex; align-items:center; gap:7px;
+  padding:9px 15px; border-radius:9px; border:1px solid var(--border);
+  background:var(--surface-2); color:var(--text); font-size:13px; font-weight:500;
+  transition:border-color .12s, transform .1s;
+}
+.btn:hover{ border-color:#3a4258; }
+.btn:active{ transform:scale(0.98); }
+.btn-primary{ background:var(--mint); color:#06140D; border-color:var(--mint); font-weight:600; }
+.btn-primary:hover{ border-color:var(--mint); box-shadow:0 6px 18px -6px rgba(61,220,151,0.45); }
+.btn-danger{ color:var(--coral); }
+.btn-danger:hover{ border-color:var(--coral); }
+.btn-icon{ padding:9px; }
+.btn svg{ width:14px; height:14px; }
+
+.page{ display:none; animation:fadeIn .25s ease; }
+.page.active{ display:block; }
+@keyframes fadeIn{ from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);} }
+
+/* Cards / grid */
+.grid{ display:grid; gap:16px; }
+.grid-4{ grid-template-columns:repeat(4, 1fr); }
+.grid-3{ grid-template-columns:repeat(3, 1fr); }
+.grid-2{ grid-template-columns:2fr 1fr; }
+@media (max-width:1100px){ .grid-4{grid-template-columns:repeat(2,1fr);} .grid-3{grid-template-columns:repeat(2,1fr);} .grid-2{grid-template-columns:1fr;} }
+
+.card{
+  background:var(--surface); border:1px solid var(--border-soft);
+  border-radius:var(--radius); padding:20px;
+}
+.card-title{ font-size:12.5px; color:var(--text-dim); font-weight:500; margin-bottom:4px; }
+.stat-value{ font-family:var(--font-mono); font-size:26px; font-weight:700; letter-spacing:-0.01em; }
+.stat-trend{ display:flex; align-items:center; gap:5px; margin-top:8px; font-size:12px; font-weight:600; }
+.stat-trend.up{ color:var(--mint); }
+.stat-trend.down{ color:var(--coral); }
+.stat-trend svg{ width:12px; height:12px; }
+
+.section-title{
+  font-family:var(--font-display); font-size:15px; font-weight:600; margin:28px 0 14px;
+  display:flex; align-items:center; justify-content:space-between;
+}
+.section-title .count{ font-family:var(--font-mono); font-size:11px; color:var(--text-faint); font-weight:400; }
+
+.list{ display:flex; flex-direction:column; gap:8px; }
+.row-item{
+  display:flex; align-items:center; gap:14px;
+  background:var(--surface); border:1px solid var(--border-soft);
+  border-radius:11px; padding:13px 16px;
+  transition:border-color .12s;
+}
+.row-item:hover{ border-color:#2b3244; }
+.row-icon{
+  width:36px; height:36px; border-radius:9px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700;
+}
+.row-main{ flex:1; min-width:0; }
+.row-title{ font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.row-sub{ font-size:11.5px; color:var(--text-faint); margin-top:2px; }
+.row-amount{ font-family:var(--font-mono); font-weight:700; font-size:14.5px; white-space:nowrap; }
+.row-actions{ display:flex; gap:4px; }
+.icon-btn{
+  background:none; border:none; color:var(--text-faint); padding:6px; border-radius:7px;
+}
+.icon-btn:hover{ background:var(--surface-2); color:var(--text); }
+.icon-btn svg{ width:15px; height:15px; }
+
+.empty-state{
+  text-align:center; padding:44px 20px; color:var(--text-faint);
+}
+.empty-state svg{ width:34px; height:34px; margin-bottom:10px; opacity:0.5; }
+.empty-state p{ font-size:13px; }
+
+.pill{
+  display:inline-flex; align-items:center; padding:3px 9px; border-radius:20px;
+  font-size:10.5px; font-weight:600; letter-spacing:0.02em;
+}
+.progress-track{ height:7px; background:var(--surface-2); border-radius:20px; overflow:hidden; margin-top:10px; }
+.progress-fill{ height:100%; border-radius:20px; transition:width .4s ease; }
+
+/* Modal */
+.modal-overlay{
+  position:fixed; inset:0; background:rgba(6,8,13,0.72); backdrop-filter:blur(3px);
+  display:none; align-items:center; justify-content:center; z-index:100; padding:20px;
+}
+.modal-overlay.active{ display:flex; }
+.modal{
+  width:100%; max-width:420px; background:var(--surface-2); border:1px solid var(--border);
+  border-radius:16px; padding:26px; max-height:88vh; overflow-y:auto;
+}
+.modal h3{ font-family:var(--font-display); font-size:17px; margin-bottom:18px; }
+.modal .field{ margin-bottom:14px; }
+.modal .field input, .modal .field select, .modal .field textarea{
+  width:100%; background:var(--bg); border:1px solid var(--border); border-radius:9px;
+  padding:10px 12px; color:var(--text); font-size:13.5px; outline:none;
+}
+.modal .field input:focus, .modal .field select:focus{ border-color:var(--blue); }
+.field-row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.modal-actions{ display:flex; gap:10px; margin-top:20px; }
+.modal-actions .btn{ flex:1; justify-content:center; }
+.color-picker{ display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+.color-swatch{ width:26px; height:26px; border-radius:50%; cursor:pointer; border:2px solid transparent; }
+.color-swatch.selected{ border-color:var(--text); }
+
+.toast{
+  position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px);
+  background:var(--surface-2); border:1px solid var(--border); padding:11px 18px;
+  border-radius:10px; font-size:13px; opacity:0; transition:all .25s ease; z-index:200;
+  display:flex; align-items:center; gap:8px;
+}
+.toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+.toast svg{ width:14px; height:14px; color:var(--mint); }
+
+.chip-check{ display:flex; align-items:center; gap:10px; }
+.chip-check input[type=checkbox]{ width:17px; height:17px; accent-color:var(--mint); cursor:pointer; }
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-brand"><div class="dot"></div><span>NUMERA</span></div>
+    <h1 id="login-heading">Bentornato</h1>
+    <p class="sub" id="login-sub">Accedi al tuo cockpit finanziario per gestire eventi, conti e obiettivi.</p>
+    <div class="login-error" id="login-error"></div>
+    <form id="login-form">
+      <div class="field" id="field-name" style="display:none;">
+        <label>Nome</label>
+        <input type="text" id="reg-name" placeholder="Antonio">
+      </div>
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="login-username" placeholder="antonio" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button type="submit" class="login-btn" id="login-submit">Accedi</button>
+    </form>
+    <div class="login-toggle" id="login-toggle">Non hai un account? <a href="#" id="toggle-link">Registrati</a></div>
+    <div class="login-note">I tuoi dati sono salvati su Firebase e sincronizzati su tutti i tuoi dispositivi.</div>
+  </div>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="dot"></div><span>NUMERA</span></div>
+
+    <div class="nav-group">
+      <div class="nav-label">Panoramica</div>
+      <a class="nav-item active" data-page="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        Dashboard
+      </a>
+      <a class="nav-item" data-page="conti">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+        Conti
+      </a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Denaro</div>
+      <a class="nav-item" data-page="preventivati">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        Preventivati
+      </a>
+      <a class="nav-item" data-page="mancanti">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+        Mancanti
+        <span class="nav-badge" id="badge-mancanti"></span>
+      </a>
+      <a class="nav-item" data-page="fisse">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 2l4 4-4 4M3 12v-2a4 4 0 014-4h14M7 22l-4-4 4-4M21 12v2a4 4 0 01-4 4H3"/></svg>
+        Spese fisse
+      </a>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-label">Organizza</div>
+      <a class="nav-item" data-page="obiettivi">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
+        Obiettivi
+      </a>
+      <a class="nav-item" data-page="acquisti">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2l1.5 4M18 2l-1.5 4M3.5 8h17l-1.6 9.6a2 2 0 01-2 1.7H7.1a2 2 0 01-2-1.7L3.5 8z"/><circle cx="9" cy="21" r="1"/><circle cx="16" cy="21" r="1"/></svg>
+        Lista Acquisti
+      </a>
+      <a class="nav-item" data-page="contatti">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+        Contatti
+      </a>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="user-avatar" id="user-avatar">A</div>
+        <div class="user-info">
+          <div class="user-name" id="user-name-display">Antonio</div>
+          <div class="user-role">Sincronizzato su Firebase</div>
+        </div>
+        <button class="logout-btn" id="logout-btn" title="Esci">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- DASHBOARD -->
+    <section class="page active" id="page-dashboard"></section>
+    <!-- CONTI -->
+    <section class="page" id="page-conti"></section>
+    <!-- PREVENTIVATI -->
+    <section class="page" id="page-preventivati"></section>
+    <!-- MANCANTI -->
+    <section class="page" id="page-mancanti"></section>
+    <!-- FISSE -->
+    <section class="page" id="page-fisse"></section>
+    <!-- OBIETTIVI -->
+    <section class="page" id="page-obiettivi"></section>
+    <!-- ACQUISTI -->
+    <section class="page" id="page-acquisti"></section>
+    <!-- CONTATTI -->
+    <section class="page" id="page-contatti"></section>
+  </main>
+</div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<div class="toast" id="toast">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+  <span id="toast-text"></span>
+</div>
+
+<script type="module">
+  // Firebase init: App + Firestore + Auth anonima (invisibile all'utente).
+  // Il login "vero" (username/password) resta gestito da Numera in app.js;
+  // l'auth anonima serve solo a far rispettare le regole di sicurezza di Firestore.
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+  import {
+    getFirestore, doc, getDoc, setDoc
+  } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+  import {
+    getAuth, onAuthStateChanged, signInAnonymously
+  } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCQpRTzvgsKGQzpamYczDb1WtliC3YavnM",
+    authDomain: "numera-3c5d1.firebaseapp.com",
+    projectId: "numera-3c5d1",
+    storageBucket: "numera-3c5d1.firebasestorage.app",
+    messagingSenderId: "439558035940",
+    appId: "1:439558035940:web:cd8169ba5ddc92c4a18ff1"
+  };
+
+  const fbApp = initializeApp(firebaseConfig);
+  const firestoreDB = getFirestore(fbApp);
+  const auth = getAuth(fbApp);
+
+  window._fb = { db: firestoreDB, doc, getDoc, setDoc };
+  window._fbReady = new Promise((resolve, reject) => {
+    onAuthStateChanged(auth, (user) => {
+      if (user) resolve(user);
+      else signInAnonymously(auth).catch(reject);
+    });
+  });
+</script>
+<script src="app.js" defer></script>
+</body>
+</html>
