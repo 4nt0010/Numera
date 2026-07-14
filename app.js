@@ -568,7 +568,7 @@ function renderDashboard(){
     }).slice(0,6).map(x=>x.m);
 
     document.getElementById('page-dashboard').innerHTML = `
-      <div class="hero-balance-card">
+      <div class="mobile-dash-hero">
         <div class="hero-balance-label">Saldo totale</div>
         <div class="hero-balance-amount">${euro(totalConti)}</div>
         ${trendPct!==null ? `<div class="hero-balance-trend ${trendAbs>=0?'up':'down'}">
@@ -587,32 +587,33 @@ function renderDashboard(){
         </div>
       </div>
 
-      <div class="spend-summary">
-        <div class="spend-summary-text">
-          <div class="spend-summary-label">Spesa questo mese</div>
-          <div class="spend-summary-amount">${euro(usciteMese)}</div>
+      <div class="mobile-dash-sheet">
+        <div class="spend-summary">
+          <div class="spend-summary-text">
+            <div class="spend-summary-label">Spesa questo mese</div>
+            <div class="spend-summary-amount">${euro(usciteMese)}</div>
+          </div>
+          <div class="spend-summary-icons">
+            ${categorieTop.length ? categorieTop.map(c=>`<div class="spend-summary-icon" style="background:${c.color};" title="${esc(c.label)}: ${euro(speseCategoria[c.key])}">${esc(c.label.charAt(0))}</div>`).join('') : `<div class="spend-summary-icon" style="background:var(--surface-2); color:var(--text-faint);">—</div>`}
+          </div>
         </div>
-        <div class="spend-summary-icons">
-          ${categorieTop.length ? categorieTop.map(c=>`<div class="spend-summary-icon" style="background:${c.color};" title="${esc(c.label)}: ${euro(speseCategoria[c.key])}">${esc(c.label.charAt(0))}</div>`).join('') : `<div class="spend-summary-icon" style="background:var(--surface-2); color:var(--text-faint);">—</div>`}
-        </div>
-      </div>
 
-      <div class="section-title">Transazioni recenti <span class="count">${movimentiRecenti.length}</span></div>
-      <div class="list">
-        ${movimentiRecenti.length ? movimentiRecenti.map(m=>{
-          const isTrasf = m.type==='trasferimento';
-          const isUscita = m.type==='uscita';
-          const acc = !isTrasf ? db.accounts.find(a=>a.id===m.accountId) : null;
-          const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,55,95,0.14)':'var(--mint-dim)');
-          const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF375F':'var(--mint)');
-          const iconPath = isTrasf ? '<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>' : (isUscita ? '<path d="M12 5v14M19 12l-7 7-7-7"/>' : '<path d="M12 19V5M5 12l7-7 7 7"/>');
-          return `<div class="row-item">
-            <div class="row-icon" style="background:${iconBg}; color:${iconColor};">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${iconPath}</svg>
-            </div>
-            <div class="row-main"><div class="row-title">${esc(m.name)}</div><div class="row-sub">${acc?esc(acc.name):fmtDate(m.date)}</div></div>
-            <div class="row-amount" style="color:${isTrasf?'var(--blue)':(isUscita?'var(--coral)':'var(--mint)')}">${isTrasf?'':(isUscita?'−':'+')} ${euro(m.amount)}</div>
-          </div>`;
+        <div class="section-title">Transazioni recenti <span class="count">${movimentiRecenti.length}</span></div>
+        <div class="list">
+          ${movimentiRecenti.length ? movimentiRecenti.map(m=>{
+            const isTrasf = m.type==='trasferimento';
+            const isUscita = m.type==='uscita';
+            const acc = !isTrasf ? db.accounts.find(a=>a.id===m.accountId) : null;
+            const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,55,95,0.14)':'var(--mint-dim)');
+            const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF375F':'var(--mint)');
+            const iconPath = isTrasf ? '<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>' : (isUscita ? '<path d="M12 5v14M19 12l-7 7-7-7"/>' : '<path d="M12 19V5M5 12l7-7 7 7"/>');
+            return `<div class="row-item">
+              <div class="row-icon" style="background:${iconBg}; color:${iconColor};">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${iconPath}</svg>
+              </div>
+              <div class="row-main"><div class="row-title">${esc(m.name)}</div><div class="row-sub">${acc?esc(acc.name):fmtDate(m.date)}</div></div>
+              <div class="row-amount" style="color:${isTrasf?'var(--blue)':(isUscita?'var(--coral)':'var(--mint)')}">${isTrasf?'':(isUscita?'−':'+')} ${euro(m.amount)}</div>
+            </div>`;
         }).join('') : emptyState('Nessun movimento ancora. Registra una spesa o un\u2019entrata per iniziare.')}
       </div>
 
@@ -622,6 +623,7 @@ function renderDashboard(){
       <div class="section-title">Obiettivi in evidenza <span class="count">${db.obiettivi.length}</span></div>
       <div class="grid grid-2">
         ${obiettiviCardsHtml}
+      </div>
       </div>
     `;
     return;

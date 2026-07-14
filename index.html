@@ -632,10 +632,10 @@ input,select{ font-family:inherit; }
 
 /* ----- mobile: telefono, layout stile app bancaria ----- */
 @media (max-width:900px){
-  #app.active{ padding:0; gap:0; }
+  #app.active{ position:fixed; inset:0; padding:0; gap:0; display:block; }
   .main{
-    height:auto; min-height:100vh; min-height:100dvh;
-    position:static; overflow:visible; border-radius:0; border:none; box-shadow:none;
+    height:100%; min-height:0;
+    position:static; overflow-y:auto; overflow-x:hidden; border-radius:0; border:none; box-shadow:none;
   }
 
   /* KPI bar: card "saldo" grande in alto + chip in riga sotto, stile app bancaria */
@@ -721,18 +721,17 @@ input,select{ font-family:inherit; }
   .main:has(#page-dashboard.active) .kpi-bar{ display:none; }
   .main.dash-active .kpi-bar{ display:none; }
 
-  /* ===== Dashboard mobile in stile app bancaria ===== */
-  .hero-balance-card{
+  /* ===== Dashboard mobile: bolla piena in alto + un unico foglio sotto, stile app bancaria ===== */
+  .mobile-dash-hero{
     position:relative; overflow:hidden;
-    background:linear-gradient(160deg, rgba(28,48,36,0.96), rgba(8,16,12,0.98));
-    border:1px solid rgba(255,255,255,0.12);
-    border-radius:28px; padding:24px 22px 22px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 20px 45px -24px rgba(0,0,0,0.65);
-    color:#F5F8F6; margin-bottom:14px;
+    background:linear-gradient(160deg, rgba(28,48,36,0.98), rgba(6,14,10,1));
+    margin:-14px -14px 0 -14px;
+    padding:calc(22px + env(safe-area-inset-top)) 20px 46px;
+    color:#F5F8F6;
   }
-  .hero-balance-card::after{
-    content:''; position:absolute; top:-45%; right:-25%; width:180px; height:180px; border-radius:50%;
-    background:var(--mint-glow); filter:blur(50px); opacity:0.28; pointer-events:none;
+  .mobile-dash-hero::after{
+    content:''; position:absolute; top:-40%; right:-20%; width:220px; height:220px; border-radius:50%;
+    background:var(--mint-glow); filter:blur(60px); opacity:0.3; pointer-events:none;
   }
   .hero-balance-label{ position:relative; font-size:12px; font-weight:600; color:#9BB0A6; text-transform:uppercase; letter-spacing:0.03em; }
   .hero-balance-amount{ position:relative; font-family:var(--font-mono); font-size:36px; font-weight:800; letter-spacing:-0.02em; margin-top:6px; }
@@ -748,6 +747,15 @@ input,select{ font-family:inherit; }
   }
   .hero-balance-btn.primary{ background:linear-gradient(165deg, var(--mint-strong), var(--mint)); color:#04240F; border-color:var(--mint); font-weight:700; }
 
+  .mobile-dash-sheet{
+    position:relative; z-index:2;
+    background:#F6F9F7;
+    margin:-24px -14px 0 -14px;
+    border-radius:26px 26px 0 0;
+    padding:22px 14px 110px;
+    min-height:55vh;
+  }
+
   .spend-summary{
     display:flex; align-items:center; justify-content:space-between; gap:12px;
     background:linear-gradient(165deg, var(--panel-1), var(--panel-2));
@@ -759,7 +767,7 @@ input,select{ font-family:inherit; }
   .spend-summary-icons{ display:flex; }
   .spend-summary-icon{
     width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center;
-    font-size:12px; font-weight:800; color:#04140C; border:2px solid var(--bg);
+    font-size:12px; font-weight:800; color:#04140C; border:2px solid #F6F9F7;
     margin-left:-8px;
   }
   .spend-summary-icon:first-child{ margin-left:0; }
