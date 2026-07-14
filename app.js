@@ -38,41 +38,17 @@ async function fbPersist(username, dbData, snaps){
   ]);
 }
 
-/* ---------- seed iniziale, ripreso dal tuo foglio Excel ---------- */
+/* ---------- stato iniziale vuoto per ogni nuovo utente ---------- */
 function seedDB(){
   return {
-    accounts: [
-      { id: uid(), name:'Conto Corrente', balance: 4630.45, icon:'CC', color:'#6C8EFF' },
-      { id: uid(), name:'Denaro Contante', balance: 1150,    icon:'€',  color:'#3DDC97' },
-      { id: uid(), name:'PostePay',        balance: 0.20,    icon:'PP', color:'#F5B94D' },
-    ],
-    preventivati: [
-      mk('Mattia Ostuni', 300, '2026-07-22'),
-      mk('60 Valeria', 100, '2026-07-18'),
-      mk('18 Leonardo', 150, '2026-07-21'),
-      mk('Gianluca Palasciano', 300, '2026-07-25', 'Saldo entro 01/08'),
-      mk('25 Mariangela', 150, '2026-08-02'),
-      mk('5 Anni Pina', 120, '2026-07-27'),
-      mk('Swing&Soda', 150, '2026-09-11'),
-      mk('Civitas Tonantis 2026', 1600, '2026-09-19'),
-      mk('Zoo Safari (Luglio)', 1700, '2026-07-31'),
-      mk('Zoo Safari (Agosto)', 1500, '2026-08-31'),
-      mk('Zoo Safari (Settembre)', 1000, '2026-09-30'),
-    ],
-    mancanti: [
-      { id: uid(), name:'Zoo Safari (Giugno)', amount: 1100, note:'' },
-    ],
+    accounts: [],
+    preventivati: [],
+    mancanti: [],
     fisse: [],
     obiettivi: [],
     acquisti: [],
-    contatti: [
-      { id: uid(), name:'Mattia Ostuni', phone:'', notes:'' },
-      { id: uid(), name:'Gianluca Palasciano', phone:'', notes:'' },
-    ],
+    contatti: [],
   };
-  function mk(name, amount, date, note){
-    return { id: uid(), name, amount, date, note: note||'', color: ICON_COLORS[Math.floor(Math.random()*ICON_COLORS.length)] };
-  }
 }
 
 function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
