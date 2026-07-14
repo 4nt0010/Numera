@@ -95,6 +95,15 @@ function oggiStr(){ return dateKeyFromDate(new Date()); }
 function fmtDate(d){ if(!d) return '—'; const dt = new Date(d+'T00:00:00'); return dt.toLocaleDateString('it-IT',{day:'2-digit', month:'short'}); }
 function fmtMese(m){ if(!m) return '—'; const [y,mm] = m.split('-'); const dt = new Date(Number(y), Number(mm)-1, 1); const s = dt.toLocaleDateString('it-IT',{month:'long', year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1); }
 function daysUntil(d){ const dt=new Date(d+'T00:00:00'); const now=new Date(); now.setHours(0,0,0,0); return Math.round((dt-now)/86400000); }
+function isMobileView(){ return window.innerWidth <= 900; }
+let _resizeTimer;
+window.addEventListener('resize', ()=>{
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(()=>{
+    const activePage = document.querySelector('.page.active');
+    if(activePage && activePage.id==='page-dashboard' && typeof renderDashboard==='function') renderDashboard();
+  }, 200);
+});
 
 /* ---------------- state ---------------- */
 let db = null;
@@ -249,6 +258,7 @@ function goToPage(pageKey){
   if(bnItem) bnItem.classList.add('active');
   document.getElementById('page-'+pageKey).classList.add('active');
   const mainEl = document.querySelector('.main');
+  mainEl.classList.toggle('dash-active', pageKey==='dashboard');
   if(pageKey==='simulatore'){
     mainEl.classList.add('sim-active');
     if(!simInitialized){ simState.saldo = computeTotals().totalConti; simInitialized = true; }
@@ -522,6 +532,101 @@ function renderDashboard(){
 
   const upcoming = [...db.preventivati].filter(p=>p.date).sort((a,b)=> new Date(a.date)-new Date(b.date)).slice(0,5);
 
+  const quickActionsHtml = `
+    <div class="quick-actions">
+      <button class="qa-btn" onclick="modalMovimento()"><span class="qa-icon" style="background:rgba(255,55,95,0.14); color:#FF375F;">+</span>Spesa</button>
+      <button class="qa-btn" onclick="modalAccount()"><span class="qa-icon" style="background:var(--mint-dim); color:var(--mint);">+</span>Conto</button>
+      <button class="qa-btn" onclick="modalPreventivato()"><span class="qa-icon" style="background:var(--blue-dim); color:var(--blue);">+</span>Evento</button>
+      <button class="qa-btn" onclick="modalMancante()"><span class="qa-icon" style="background:var(--coral-dim); color:var(--coral);">+</span>Mancante</button>
+      <button class="qa-btn" onclick="modalFissa()"><span class="qa-icon" style="background:var(--amber-dim); color:var(--amber);">+</span>Spesa fissa</button>
+      <button class="qa-btn" onclick="modalObiettivo()"><span class="qa-icon" style="background:rgba(178,124,255,0.14); color:#B27CFF;">+</span>Obiettivo</button>
+      <button class="qa-btn" onclick="modalAcquisto()"><span class="qa-icon" style="background:rgba(79,209,232,0.14); color:#4FD1E8;">+</span>Acquisto</button>
+    </div>
+  `;
+  const obiettiviCardsHtml = obiettiviTop.length ? obiettiviTop.map(o=>{
+    const pct = Math.min(100, (o.current/o.target*100)||0);
+    return `<div class="card">
+      <div class="card-title">${esc(o.name)}</div>
+      <div class="stat-value" style="margin-top:6px; font-size:18px;">${euro(o.current)} <span style="color:var(--text-faint); font-size:12.5px; font-weight:500;">/ ${euro(o.target)}</span></div>
+      <div class="progress-track"><div class="progress-fill" style="width:${pct}%; background:${o.color};"></div></div>
+      <div class="row-sub" style="margin-top:8px;">${pct.toFixed(0)}% raggiunto</div>
+    </div>`;
+  }).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun obiettivo. Creane uno per iniziare a risparmiare.')}</div>`;
+
+  if(isMobileView()){
+    const meseCorrente = meseKeyFromDate(new Date());
+    const usciteMese = db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).reduce((s,m)=>s+Number(m.amount),0);
+    const speseCategoria = {};
+    db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).forEach(m=>{
+      const key = m.category || 'altro';
+      speseCategoria[key] = (speseCategoria[key]||0) + Number(m.amount);
+    });
+    const categorieTop = CATEGORIE.filter(c=>speseCategoria[c.key]).sort((a,b)=>speseCategoria[b.key]-speseCategoria[a.key]).slice(0,4);
+    const movimentiRecenti = db.movimenti.map((m,i)=>({m,i})).sort((a,b)=>{
+      const cmp = (b.m.date||'').localeCompare(a.m.date||'');
+      return cmp!==0 ? cmp : b.i-a.i;
+    }).slice(0,6).map(x=>x.m);
+
+    document.getElementById('page-dashboard').innerHTML = `
+      <div class="hero-balance-card">
+        <div class="hero-balance-label">Saldo totale</div>
+        <div class="hero-balance-amount">${euro(totalConti)}</div>
+        ${trendPct!==null ? `<div class="hero-balance-trend ${trendAbs>=0?'up':'down'}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
+          ${trendAbs>=0?'+':''}${trendPct.toFixed(1)}% negli ultimi 30gg
+        </div>` : ''}
+        <div class="hero-balance-actions">
+          <button class="hero-balance-btn primary" onclick="modalMovimento(null,'uscita')">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+            Spesa
+          </button>
+          <button class="hero-balance-btn" onclick="modalMovimento(null,'entrata')">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            Entrata
+          </button>
+        </div>
+      </div>
+
+      <div class="spend-summary">
+        <div class="spend-summary-text">
+          <div class="spend-summary-label">Spesa questo mese</div>
+          <div class="spend-summary-amount">${euro(usciteMese)}</div>
+        </div>
+        <div class="spend-summary-icons">
+          ${categorieTop.length ? categorieTop.map(c=>`<div class="spend-summary-icon" style="background:${c.color};" title="${esc(c.label)}: ${euro(speseCategoria[c.key])}">${esc(c.label.charAt(0))}</div>`).join('') : `<div class="spend-summary-icon" style="background:var(--surface-2); color:var(--text-faint);">—</div>`}
+        </div>
+      </div>
+
+      <div class="section-title">Transazioni recenti <span class="count">${movimentiRecenti.length}</span></div>
+      <div class="list">
+        ${movimentiRecenti.length ? movimentiRecenti.map(m=>{
+          const isTrasf = m.type==='trasferimento';
+          const isUscita = m.type==='uscita';
+          const acc = !isTrasf ? db.accounts.find(a=>a.id===m.accountId) : null;
+          const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,55,95,0.14)':'var(--mint-dim)');
+          const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF375F':'var(--mint)');
+          const iconPath = isTrasf ? '<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>' : (isUscita ? '<path d="M12 5v14M19 12l-7 7-7-7"/>' : '<path d="M12 19V5M5 12l7-7 7 7"/>');
+          return `<div class="row-item">
+            <div class="row-icon" style="background:${iconBg}; color:${iconColor};">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${iconPath}</svg>
+            </div>
+            <div class="row-main"><div class="row-title">${esc(m.name)}</div><div class="row-sub">${acc?esc(acc.name):fmtDate(m.date)}</div></div>
+            <div class="row-amount" style="color:${isTrasf?'var(--blue)':(isUscita?'var(--coral)':'var(--mint)')}">${isTrasf?'':(isUscita?'−':'+')} ${euro(m.amount)}</div>
+          </div>`;
+        }).join('') : emptyState('Nessun movimento ancora. Registra una spesa o un\u2019entrata per iniziare.')}
+      </div>
+
+      <div class="section-title" style="margin-top:24px;">Azioni rapide</div>
+      ${quickActionsHtml}
+
+      <div class="section-title">Obiettivi in evidenza <span class="count">${db.obiettivi.length}</span></div>
+      <div class="grid grid-2">
+        ${obiettiviCardsHtml}
+      </div>
+    `;
+    return;
+  }
+
   document.getElementById('page-dashboard').innerHTML = `
     <div class="topbar">
       <div>
@@ -534,15 +639,7 @@ function renderDashboard(){
       </div>` : ''}
     </div>
 
-    <div class="quick-actions">
-      <button class="qa-btn" onclick="modalMovimento()"><span class="qa-icon" style="background:rgba(255,55,95,0.14); color:#FF375F;">+</span>Spesa</button>
-      <button class="qa-btn" onclick="modalAccount()"><span class="qa-icon" style="background:var(--mint-dim); color:var(--mint);">+</span>Conto</button>
-      <button class="qa-btn" onclick="modalPreventivato()"><span class="qa-icon" style="background:var(--blue-dim); color:var(--blue);">+</span>Evento</button>
-      <button class="qa-btn" onclick="modalMancante()"><span class="qa-icon" style="background:var(--coral-dim); color:var(--coral);">+</span>Mancante</button>
-      <button class="qa-btn" onclick="modalFissa()"><span class="qa-icon" style="background:var(--amber-dim); color:var(--amber);">+</span>Spesa fissa</button>
-      <button class="qa-btn" onclick="modalObiettivo()"><span class="qa-icon" style="background:rgba(178,124,255,0.14); color:#B27CFF;">+</span>Obiettivo</button>
-      <button class="qa-btn" onclick="modalAcquisto()"><span class="qa-icon" style="background:rgba(79,209,232,0.14); color:#4FD1E8;">+</span>Acquisto</button>
-    </div>
+    ${quickActionsHtml}
 
     <div class="grid grid-3" style="margin-top:20px;">
       <div class="card">
@@ -595,15 +692,7 @@ function renderDashboard(){
 
     <div class="section-title">Obiettivi in evidenza <span class="count">${db.obiettivi.length}</span></div>
     <div class="grid grid-3">
-      ${obiettiviTop.length ? obiettiviTop.map(o=>{
-        const pct = Math.min(100, (o.current/o.target*100)||0);
-        return `<div class="card">
-          <div class="card-title">${esc(o.name)}</div>
-          <div class="stat-value" style="margin-top:6px; font-size:18px;">${euro(o.current)} <span style="color:var(--text-faint); font-size:12.5px; font-weight:500;">/ ${euro(o.target)}</span></div>
-          <div class="progress-track"><div class="progress-fill" style="width:${pct}%; background:${o.color};"></div></div>
-          <div class="row-sub" style="margin-top:8px;">${pct.toFixed(0)}% raggiunto</div>
-        </div>`;
-      }).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun obiettivo. Creane uno per iniziare a risparmiare.')}</div>`}
+      ${obiettiviCardsHtml}
     </div>
   `;
 
@@ -900,12 +989,12 @@ function drawCategorieChart(speseCategoria){
     }
   });
 }
-function modalMovimento(id){
+function modalMovimento(id, presetType){
   if(!db.accounts.length) return toast('Crea prima almeno un conto.');
   const isEdit = !!id;
   const m = isEdit ? db.movimenti.find(x=>x.id===id) : null;
   if(m && m.rettifica) return toast('Le rettifiche di saldo non sono modificabili: cambia di nuovo il saldo dal conto se serve.');
-  const tipo = m ? m.type : 'uscita';
+  const tipo = m ? m.type : (presetType || 'uscita');
   const accOptions = (selected)=> db.accounts.map(a=>`<option value="${a.id}" ${selected===a.id?'selected':''}>${esc(a.name)}</option>`).join('');
   const catOptions = (selected)=> CATEGORIE.map(c=>`<option value="${c.key}" ${(selected||'altro')===c.key?'selected':''}>${esc(c.label)}</option>`).join('');
   openModal(`
