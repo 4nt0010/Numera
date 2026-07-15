@@ -260,14 +260,10 @@ function goToPage(pageKey){
   const mainEl = document.querySelector('.main');
   mainEl.classList.toggle('dash-active', pageKey==='dashboard');
 
-  // mostra/nasconde il contenitore mobile della Dashboard in base alla pagina corrente:
-  // prima restava visibile su ogni schermata perché nulla lo nascondeva alla navigazione.
-  const mobileDashRoot = document.getElementById('mobile-dash-root');
+  // la visibilità del contenitore mobile della Dashboard è decisa dal CSS (.dash-active),
+  // qui serve solo assicurarsi che il contenuto sia aggiornato quando ci si naviga sopra.
   if(pageKey==='dashboard' && isMobileView()){
     renderDashboard();
-  } else if(mobileDashRoot){
-    mobileDashRoot.style.display = 'none';
-    mobileDashRoot.innerHTML = '';
   }
 
   if(pageKey==='simulatore'){
@@ -567,17 +563,14 @@ function renderDashboard(){
   const dashboardIsActivePage = document.getElementById('page-dashboard').classList.contains('active');
 
   if(isMobileView() && !dashboardIsActivePage){
-    // non siamo sulla Dashboard: il contenitore mobile deve restare nascosto e vuoto
-    document.getElementById('mobile-dash-root').style.display = 'none';
+    // non siamo sulla Dashboard: nessun contenuto da mostrare qui (il CSS lo tiene comunque nascosto)
     document.getElementById('mobile-dash-root').innerHTML = '';
     return;
   }
 
   if(isMobileView()){
     document.getElementById('page-dashboard').innerHTML = '';
-    document.getElementById('page-dashboard').style.display = 'none';
     const rootEl = document.getElementById('mobile-dash-root');
-    rootEl.style.display = 'flex';
 
     const meseCorrente = meseKeyFromDate(new Date());
     const usciteMese = db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).reduce((s,m)=>s+Number(m.amount),0);
@@ -686,9 +679,7 @@ function renderDashboard(){
     return;
   }
 
-  document.getElementById('mobile-dash-root').style.display = 'none';
   document.getElementById('mobile-dash-root').innerHTML = '';
-  document.getElementById('page-dashboard').style.display = '';
   document.getElementById('page-dashboard').innerHTML = `
     <div class="topbar">
       <div>

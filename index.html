@@ -724,6 +724,9 @@ input,select{ font-family:inherit; }
 
   /* ===== Dashboard mobile: bolla piena in alto + un unico foglio sotto, stile app bancaria ===== */
   #mobile-dash-root{ display:none; margin:0; padding:0; flex-direction:column; flex:1; }
+  .main.dash-active #mobile-dash-root{ display:flex; }
+  .main:has(#page-dashboard.active) #mobile-dash-root{ display:flex; }
+  .main.dash-active #page-dashboard{ display:none !important; }
   .mobile-dash-hero{
     position:relative; overflow:hidden; flex-shrink:0;
     background:linear-gradient(160deg, rgba(28,48,36,0.98), rgba(6,14,10,1));
