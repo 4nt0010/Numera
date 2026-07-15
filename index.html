@@ -554,7 +554,7 @@ input,select{ font-family:inherit; }
 }
 .row-main{ flex:1; min-width:0; }
 .row-title{ font-size:13.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.row-sub{ font-size:11.5px; color:var(--text-faint); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.row-sub{ font-size:11.5px; color:var(--text-faint); margin-top:2px; }
 .row-amount{ font-family:var(--font-mono); font-weight:700; font-size:14.5px; white-space:nowrap; }
 .row-actions{ display:flex; gap:4px; }
 .icon-btn{
@@ -571,7 +571,7 @@ input,select{ font-family:inherit; }
 
 .pill{
   display:inline-flex; align-items:center; padding:4px 10px; border-radius:999px;
-  font-size:10.5px; font-weight:700; letter-spacing:0.02em; flex-shrink:0; white-space:nowrap;
+  font-size:10.5px; font-weight:700; letter-spacing:0.02em;
 }
 .progress-track{ height:8px; background:var(--track-bg); border-radius:999px; overflow:hidden; margin-top:10px; }
 .progress-fill{ height:100%; border-radius:999px; transition:width .4s ease; }
@@ -640,7 +640,23 @@ input,select{ font-family:inherit; }
   }
 
   /* KPI bar: card "saldo" grande in alto + chip in riga sotto, stile app bancaria */
-  .kpi-bar{ display:none; }
+  .kpi-bar{
+    position:sticky; top:0;
+    grid-template-columns:repeat(3,1fr);
+    margin:0; gap:9px; padding:14px 14px 10px; border-radius:0;
+  }
+  .kpi-cell{ padding:12px 13px; border-radius:18px; min-height:auto; gap:4px; }
+  .kpi-cell.kpi-main{ grid-column:1 / -1; padding:20px 20px 22px; border-radius:26px; gap:10px; }
+  .kpi-cell.kpi-main .kpi-icon-bubble{ width:30px; height:30px; }
+  .kpi-cell.kpi-main .kpi-icon-bubble svg{ width:15px; height:15px; }
+  .kpi-cell.kpi-main .kpi-value{ font-size:34px; }
+  .kpi-cell.kpi-main .kpi-trend{ display:inline-flex !important; }
+  .kpi-value{ font-size:15px; }
+  .kpi-label{ font-size:9px; }
+  .kpi-icon-bubble{ width:20px; height:20px; }
+  .kpi-icon-bubble svg{ width:10px; height:10px; }
+  .kpi-watermark{ width:56px; height:56px; right:-10px; bottom:-10px; }
+  .kpi-trend{ font-size:10px; padding:2px 6px 2px 5px; }
   .main-inner{ padding:14px 14px 96px; background:#F6F9F7; flex:1; }
 
   /* azioni rapide: griglia di icone tipo app, non pillole in fila */
@@ -667,16 +683,12 @@ input,select{ font-family:inherit; }
   }
   .list .row-item{
     background:none; border:none; border-radius:0; backdrop-filter:none; -webkit-backdrop-filter:none;
-    box-shadow:none; padding:12px 4px; border-bottom:1px solid var(--border-soft); gap:10px;
+    box-shadow:none; padding:13px 16px; border-bottom:1px solid var(--border-soft);
   }
   .list .row-item:last-child{ border-bottom:none; }
   .list .row-item:hover{ background:var(--surface); transform:none; }
-  .row-icon{ width:34px; height:34px; font-size:12px; }
-  .row-actions{ gap:0; }
-  .icon-btn{ padding:5px; }
-  .icon-btn svg{ width:13px; height:13px; }
-  .pill{ font-size:9.5px; padding:3px 8px; }
-  .row-amount{ font-size:13px; }
+  .row-icon{ width:36px; height:36px; }
+  .row-amount{ font-size:14px; }
 
   .section-title{ margin:24px 0 12px; }
 
