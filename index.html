@@ -720,14 +720,13 @@ input,select{ font-family:inherit; }
   /* nasconde la barra KPI fissa in alto quando siamo sulla Dashboard: la sostituisce la hero-balance-card */
   .main:has(#page-dashboard.active) .kpi-bar{ display:none; }
   .main.dash-active .kpi-bar{ display:none; }
-  .main:has(#page-dashboard.active) .main-inner{ padding:0; }
-  .main.dash-active .main-inner{ padding:0; }
 
   /* ===== Dashboard mobile: bolla piena in alto + un unico foglio sotto, stile app bancaria ===== */
+  #mobile-dash-root{ display:none; margin:0; padding:0; }
   .mobile-dash-hero{
     position:relative; overflow:hidden;
     background:linear-gradient(160deg, rgba(28,48,36,0.98), rgba(6,14,10,1));
-    margin:0; padding:14px 20px 46px;
+    margin:0; padding:14px 20px 22px;
     padding-top:calc(14px + env(safe-area-inset-top));
     color:#F5F8F6;
   }
@@ -748,6 +747,11 @@ input,select{ font-family:inherit; }
     font-size:13.5px; font-weight:600; padding:11px; border-radius:999px;
   }
   .hero-balance-btn.primary{ background:linear-gradient(165deg, var(--mint-strong), var(--mint)); color:#04240F; border-color:var(--mint); font-weight:700; }
+
+  .hero-stats-row{ position:relative; display:flex; gap:8px; margin-top:16px; }
+  .hero-stat{ flex:1; min-width:0; background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.1); border-radius:14px; padding:9px 10px; }
+  .hero-stat-label{ font-size:9.5px; font-weight:600; color:#9BB0A6; text-transform:uppercase; letter-spacing:0.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .hero-stat-value{ font-family:var(--font-mono); font-size:13.5px; font-weight:800; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
   .mobile-dash-sheet{
     position:relative; z-index:2;
@@ -999,6 +1003,8 @@ input,select{ font-family:inherit; }
         <div class="kpi-value-row"><span class="kpi-value" id="kpi-totale">€ 0,00</span></div>
       </div>
     </div>
+
+    <div id="mobile-dash-root"></div>
 
     <div class="main-inner">
       <!-- DASHBOARD -->

@@ -554,6 +554,11 @@ function renderDashboard(){
   }).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun obiettivo. Creane uno per iniziare a risparmiare.')}</div>`;
 
   if(isMobileView()){
+    document.getElementById('page-dashboard').innerHTML = '';
+    document.getElementById('page-dashboard').style.display = 'none';
+    const rootEl = document.getElementById('mobile-dash-root');
+    rootEl.style.display = 'block';
+
     const meseCorrente = meseKeyFromDate(new Date());
     const usciteMese = db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).reduce((s,m)=>s+Number(m.amount),0);
     const speseCategoria = {};
@@ -567,7 +572,7 @@ function renderDashboard(){
       return cmp!==0 ? cmp : b.i-a.i;
     }).slice(0,6).map(x=>x.m);
 
-    document.getElementById('page-dashboard').innerHTML = `
+    rootEl.innerHTML = `
       <div class="mobile-dash-hero">
         <div class="hero-balance-label">Saldo totale</div>
         <div class="hero-balance-amount">${euro(totalConti)}</div>
@@ -585,24 +590,23 @@ function renderDashboard(){
             Entrata
           </button>
         </div>
+        <div class="hero-stats-row">
+          <div class="hero-stat">
+            <div class="hero-stat-label">Preventivato</div>
+            <div class="hero-stat-value" style="color:var(--blue);">${euro(totalPrev)}</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-label">Mancante</div>
+            <div class="hero-stat-value" style="color:#ff8fa8;">${euro(totalMancanti)}</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-label">Totale</div>
+            <div class="hero-stat-value">${euro(totaleGenerale)}</div>
+          </div>
+        </div>
       </div>
 
       <div class="mobile-dash-sheet">
-        <div class="grid grid-3" style="margin-bottom:20px;">
-          <div class="card">
-            <div class="card-title">Preventivato</div>
-            <div class="stat-value" style="color:var(--blue); font-size:17px;">${euro(totalPrev)}</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Mancante</div>
-            <div class="stat-value" style="color:var(--coral); font-size:17px;">${euro(totalMancanti)}</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Totale generale</div>
-            <div class="stat-value" style="font-size:17px;">${euro(totaleGenerale)}</div>
-          </div>
-        </div>
-
         <div class="spend-summary">
           <div class="spend-summary-text">
             <div class="spend-summary-label">Spesa questo mese</div>
@@ -662,6 +666,9 @@ function renderDashboard(){
     return;
   }
 
+  document.getElementById('mobile-dash-root').style.display = 'none';
+  document.getElementById('mobile-dash-root').innerHTML = '';
+  document.getElementById('page-dashboard').style.display = '';
   document.getElementById('page-dashboard').innerHTML = `
     <div class="topbar">
       <div>
