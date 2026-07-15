@@ -95,7 +95,7 @@ function oggiStr(){ return dateKeyFromDate(new Date()); }
 function fmtDate(d){ if(!d) return '—'; const dt = new Date(d+'T00:00:00'); return dt.toLocaleDateString('it-IT',{day:'2-digit', month:'short'}); }
 function fmtMese(m){ if(!m) return '—'; const [y,mm] = m.split('-'); const dt = new Date(Number(y), Number(mm)-1, 1); const s = dt.toLocaleDateString('it-IT',{month:'long', year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1); }
 function daysUntil(d){ const dt=new Date(d+'T00:00:00'); const now=new Date(); now.setHours(0,0,0,0); return Math.round((dt-now)/86400000); }
-function isMobileView(){ return window.innerWidth <= 900; }
+function isMobileView(){ return window.innerWidth <= 900 && window.innerHeight > window.innerWidth; }
 let _resizeTimer;
 window.addEventListener('resize', ()=>{
   clearTimeout(_resizeTimer);
@@ -259,6 +259,17 @@ function goToPage(pageKey){
   document.getElementById('page-'+pageKey).classList.add('active');
   const mainEl = document.querySelector('.main');
   mainEl.classList.toggle('dash-active', pageKey==='dashboard');
+
+  // mostra/nasconde il contenitore mobile della Dashboard in base alla pagina corrente:
+  // prima restava visibile su ogni schermata perché nulla lo nascondeva alla navigazione.
+  const mobileDashRoot = document.getElementById('mobile-dash-root');
+  if(pageKey==='dashboard' && isMobileView()){
+    renderDashboard();
+  } else if(mobileDashRoot){
+    mobileDashRoot.style.display = 'none';
+    mobileDashRoot.innerHTML = '';
+  }
+
   if(pageKey==='simulatore'){
     mainEl.classList.add('sim-active');
     if(!simInitialized){ simState.saldo = computeTotals().totalConti; simInitialized = true; }
