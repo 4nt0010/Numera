@@ -553,11 +553,20 @@ function renderDashboard(){
     </div>`;
   }).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun obiettivo. Creane uno per iniziare a risparmiare.')}</div>`;
 
+  const dashboardIsActivePage = document.getElementById('page-dashboard').classList.contains('active');
+
+  if(isMobileView() && !dashboardIsActivePage){
+    // non siamo sulla Dashboard: il contenitore mobile deve restare nascosto e vuoto
+    document.getElementById('mobile-dash-root').style.display = 'none';
+    document.getElementById('mobile-dash-root').innerHTML = '';
+    return;
+  }
+
   if(isMobileView()){
     document.getElementById('page-dashboard').innerHTML = '';
     document.getElementById('page-dashboard').style.display = 'none';
     const rootEl = document.getElementById('mobile-dash-root');
-    rootEl.style.display = 'block';
+    rootEl.style.display = 'flex';
 
     const meseCorrente = meseKeyFromDate(new Date());
     const usciteMese = db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).reduce((s,m)=>s+Number(m.amount),0);
