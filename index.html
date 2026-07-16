@@ -733,6 +733,12 @@ input,select{ font-family:inherit; }
 
 /* ----- mobile: telefono in verticale, layout stile app bancaria ----- */
 @media (max-width:900px) and (orientation:portrait){
+  /* niente più "riquadro bianco su sfondo scuro": su mobile lo sfondo pagina
+     stesso diventa chiaro, così non esiste alcun pannello separato che possa
+     disallinearsi, avere ombre proprie o mostrare il verde scuro sotto in caso
+     di rimbalzo elastico dello scroll (l'effetto elastico di iOS rivela per
+     un attimo lo sfondo del <body>, quindi deve già essere quello giusto). */
+  html:has(#app.active), body:has(#app.active){ background:#F6F9F7 !important; background-image:none !important; }
   #app.active{ position:fixed; inset:0; padding:0; gap:0; display:block; }
   .main{
     height:100%; min-height:0;
