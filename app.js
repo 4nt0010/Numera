@@ -35,7 +35,11 @@ function userRef(collection, uid){
 }
 async function fbLoadDB(uid){
   const snap = await getDoc(userRef('numera_data', uid));
-  return snap.exists() ? snap.data() : seedDB();
+  // Uniamo sempre ai default di seedDB(): i documenti salvati prima dell'introduzione
+  // di un nuovo campo (es. "tasks") non lo contengono, e senza questo merge
+  // db.tasks sarebbe undefined, mandando in errore i renderer e lasciando le
+  // pagine vuote per gli utenti già esistenti.
+  return snap.exists() ? { ...seedDB(), ...snap.data() } : seedDB();
 }
 async function fbLoadSnapshots(uid){
   const snap = await getDoc(userRef('numera_snapshots', uid));
@@ -78,6 +82,7 @@ function seedDB(){
     fisse: [],
     obiettivi: [],
     acquisti: [],
+    tasks: [],
     stipendi: [],
     movimenti: [],
     budget: {},
@@ -95,15 +100,6 @@ function oggiStr(){ return dateKeyFromDate(new Date()); }
 function fmtDate(d){ if(!d) return '—'; const dt = new Date(d+'T00:00:00'); return dt.toLocaleDateString('it-IT',{day:'2-digit', month:'short'}); }
 function fmtMese(m){ if(!m) return '—'; const [y,mm] = m.split('-'); const dt = new Date(Number(y), Number(mm)-1, 1); const s = dt.toLocaleDateString('it-IT',{month:'long', year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1); }
 function daysUntil(d){ const dt=new Date(d+'T00:00:00'); const now=new Date(); now.setHours(0,0,0,0); return Math.round((dt-now)/86400000); }
-function isMobileView(){ return window.innerWidth <= 900 && window.innerHeight > window.innerWidth; }
-let _resizeTimer;
-window.addEventListener('resize', ()=>{
-  clearTimeout(_resizeTimer);
-  _resizeTimer = setTimeout(()=>{
-    const activePage = document.querySelector('.page.active');
-    if(activePage && activePage.id==='page-dashboard' && typeof renderDashboard==='function') renderDashboard();
-  }, 200);
-});
 
 /* ---------------- state ---------------- */
 let db = null;
@@ -117,6 +113,7 @@ let filters = {
   obiettivi: { q:'' },
   acquisti: { q:'' },
   conti: { q:'' },
+  task: { q:'' },
 };
 
 function saveDB(){
@@ -258,14 +255,6 @@ function goToPage(pageKey){
   if(bnItem) bnItem.classList.add('active');
   document.getElementById('page-'+pageKey).classList.add('active');
   const mainEl = document.querySelector('.main');
-  mainEl.classList.toggle('dash-active', pageKey==='dashboard');
-
-  // la visibilità del contenitore mobile della Dashboard è decisa dal CSS (.dash-active),
-  // qui serve solo assicurarsi che il contenuto sia aggiornato quando ci si naviga sopra.
-  if(pageKey==='dashboard' && isMobileView()){
-    renderDashboard();
-  }
-
   if(pageKey==='simulatore'){
     mainEl.classList.add('sim-active');
     if(!simInitialized){ simState.saldo = computeTotals().totalConti; simInitialized = true; }
@@ -363,6 +352,7 @@ const RENDER_MAP = {
   obiettivi: ()=>renderObiettivi(),
   acquisti: ()=>renderAcquisti(),
   conti: ()=>renderConti(),
+  task: ()=>renderTask(),
 };
 function setFilter(page, field, value){
   filters[page][field] = value;
@@ -491,7 +481,7 @@ function renderAll(){
   checkPreventivatiScaduti();
   checkSpeseFisseAutomatiche();
   checkAcquistiDaRimuovere();
-  const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderObiettivi, renderAcquisti, renderAccount];
+  const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderObiettivi, renderAcquisti, renderTask, renderAccount];
   renderers.forEach(fn=>{
     try{ fn(); }
     catch(err){ console.error(`Errore in ${fn.name}:`, err); }
@@ -513,33 +503,65 @@ function updateBadge(){
   bp.style.background = 'var(--amber-dim)';
   bp.style.color = 'var(--amber)';
   bp.style.display = inScadenza.length ? 'inline-block' : 'none';
+
+  const taskPendenti = db.tasks.filter(t=>!t.done);
+  const bt = document.getElementById('badge-task');
+  bt.textContent = taskPendenti.length || '';
+  bt.style.display = taskPendenti.length ? 'inline-block' : 'none';
 }
 
 /* ==================== DASHBOARD ==================== */
 let chartTrend, chartBreakdown;
 function renderDashboard(){
-  const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
+  const { totalConti } = computeTotals();
   const totalFisseMensili = db.fisse.reduce((s,a)=> s + (a.frequency==='annuale' ? a.amount/12 : a.amount), 0);
   const acquistiPending = db.acquisti.filter(a=>!a.bought);
   const acquistiPendingTotal = acquistiPending.reduce((s,a)=>s+Number(a.price||0)*Number(a.qty||1),0);
+  const taskPending = db.tasks.filter(t=>!t.done);
   const obiettiviTop = [...db.obiettivi].sort((a,b)=>{
     const pa = a.target? a.current/a.target : 0, pb = b.target? b.current/b.target : 0;
     return pb-pa;
   }).slice(0,3);
 
   const snaps = getSnapshots();
-  let trendPct = null, trendAbs = null;
+  let trendPct = null, trendAbs = null, trendRef = null;
   if(snaps.length >= 2){
     const cutoff = Date.now() - 30*86400000;
     const past = snaps.filter(s=> new Date(s.date).getTime() <= cutoff);
     const ref = past.length ? past[past.length-1] : snaps[0];
     trendAbs = totalConti - ref.total;
     trendPct = ref.total !== 0 ? (trendAbs/ref.total*100) : null;
+    trendRef = ref.total;
   }
 
   const upcoming = [...db.preventivati].filter(p=>p.date).sort((a,b)=> new Date(a.date)-new Date(b.date)).slice(0,5);
 
-  const quickActionsHtml = `
+  document.getElementById('page-dashboard').innerHTML = `
+    <div class="topbar">
+      <div>
+        <div class="page-title">Dashboard</div>
+        <div class="page-sub">Panoramica generale del tuo denaro, ${esc(session.name)}.</div>
+      </div>
+    </div>
+
+    ${trendPct!==null ? `
+    <div class="trend-banner ${trendAbs>=0?'up':'down'}">
+      <span class="trend-banner-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg></span>
+      <span class="trend-banner-label">Andamento ultimi 30 giorni</span>
+      <span class="trend-banner-amount">${trendAbs>=0?'+':'−'} ${euro(Math.abs(trendAbs))}</span>
+      <span class="trend-banner-pct">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
+        ${trendAbs>=0?'+':'−'}${Math.abs(trendPct).toFixed(1)}%
+      </span>
+      <span class="trend-banner-sub">Da ${euro(trendRef)} a ${euro(totalConti)} sul totale conti</span>
+    </div>
+    ` : `
+    <div class="trend-banner flat">
+      <span class="trend-banner-label">Andamento ultimi 30 giorni</span>
+      <span class="trend-banner-sub">Servono almeno due rilevazioni per calcolare la variazione: torna a trovarci tra qualche giorno.</span>
+    </div>
+    `}
+
     <div class="quick-actions">
       <button class="qa-btn" onclick="modalMovimento()"><span class="qa-icon" style="background:rgba(255,55,95,0.14); color:#FF375F;">+</span>Spesa</button>
       <button class="qa-btn" onclick="modalAccount()"><span class="qa-icon" style="background:var(--mint-dim); color:var(--mint);">+</span>Conto</button>
@@ -548,153 +570,15 @@ function renderDashboard(){
       <button class="qa-btn" onclick="modalFissa()"><span class="qa-icon" style="background:var(--amber-dim); color:var(--amber);">+</span>Spesa fissa</button>
       <button class="qa-btn" onclick="modalObiettivo()"><span class="qa-icon" style="background:rgba(178,124,255,0.14); color:#B27CFF;">+</span>Obiettivo</button>
       <button class="qa-btn" onclick="modalAcquisto()"><span class="qa-icon" style="background:rgba(79,209,232,0.14); color:#4FD1E8;">+</span>Acquisto</button>
-    </div>
-  `;
-  const obiettiviCardsHtml = obiettiviTop.length ? obiettiviTop.map(o=>{
-    const pct = Math.min(100, (o.current/o.target*100)||0);
-    return `<div class="card">
-      <div class="card-title">${esc(o.name)}</div>
-      <div class="stat-value" style="margin-top:6px; font-size:18px;">${euro(o.current)} <span style="color:var(--text-faint); font-size:12.5px; font-weight:500;">/ ${euro(o.target)}</span></div>
-      <div class="progress-track"><div class="progress-fill" style="width:${pct}%; background:${o.color};"></div></div>
-      <div class="row-sub" style="margin-top:8px;">${pct.toFixed(0)}% raggiunto</div>
-    </div>`;
-  }).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun obiettivo. Creane uno per iniziare a risparmiare.')}</div>`;
-
-  const dashboardIsActivePage = document.getElementById('page-dashboard').classList.contains('active');
-
-  if(isMobileView() && !dashboardIsActivePage){
-    // non siamo sulla Dashboard: nessun contenuto da mostrare qui (il CSS lo tiene comunque nascosto)
-    document.getElementById('mobile-dash-root').innerHTML = '';
-    return;
-  }
-
-  if(isMobileView()){
-    document.getElementById('page-dashboard').innerHTML = '';
-    const rootEl = document.getElementById('mobile-dash-root');
-
-    const meseCorrente = meseKeyFromDate(new Date());
-    const usciteMese = db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).reduce((s,m)=>s+Number(m.amount),0);
-    const speseCategoria = {};
-    db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).forEach(m=>{
-      const key = m.category || 'altro';
-      speseCategoria[key] = (speseCategoria[key]||0) + Number(m.amount);
-    });
-    const categorieTop = CATEGORIE.filter(c=>speseCategoria[c.key]).sort((a,b)=>speseCategoria[b.key]-speseCategoria[a.key]).slice(0,4);
-    const movimentiRecenti = db.movimenti.map((m,i)=>({m,i})).sort((a,b)=>{
-      const cmp = (b.m.date||'').localeCompare(a.m.date||'');
-      return cmp!==0 ? cmp : b.i-a.i;
-    }).slice(0,6).map(x=>x.m);
-
-    rootEl.innerHTML = `
-      <div class="mobile-dash-hero">
-        <div class="hero-balance-label">Saldo totale</div>
-        <div class="hero-balance-amount">${euro(totalConti)}</div>
-        ${trendPct!==null ? `<div class="hero-balance-trend ${trendAbs>=0?'up':'down'}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
-          ${trendAbs>=0?'+':''}${trendPct.toFixed(1)}% negli ultimi 30gg
-        </div>` : ''}
-        <div class="hero-balance-actions">
-          <button class="hero-balance-btn primary" onclick="modalMovimento(null,'uscita')">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
-            Spesa
-          </button>
-          <button class="hero-balance-btn" onclick="modalMovimento(null,'entrata')">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-            Entrata
-          </button>
-        </div>
-        <div class="hero-stats-row">
-          <div class="hero-stat">
-            <div class="hero-stat-label">Preventivato</div>
-            <div class="hero-stat-value" style="color:var(--blue);">${euro(totalPrev)}</div>
-          </div>
-          <div class="hero-stat">
-            <div class="hero-stat-label">Mancante</div>
-            <div class="hero-stat-value" style="color:#ff8fa8;">${euro(totalMancanti)}</div>
-          </div>
-          <div class="hero-stat">
-            <div class="hero-stat-label">Totale</div>
-            <div class="hero-stat-value">${euro(totaleGenerale)}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="mobile-dash-sheet">
-        <div class="spend-summary">
-          <div class="spend-summary-text">
-            <div class="spend-summary-label">Spesa questo mese</div>
-            <div class="spend-summary-amount">${euro(usciteMese)}</div>
-          </div>
-          <div class="spend-summary-icons">
-            ${categorieTop.length ? categorieTop.map(c=>`<div class="spend-summary-icon" style="background:${c.color};" title="${esc(c.label)}: ${euro(speseCategoria[c.key])}">${esc(c.label.charAt(0))}</div>`).join('') : `<div class="spend-summary-icon" style="background:var(--surface-2); color:var(--text-faint);">—</div>`}
-          </div>
-        </div>
-
-        <div class="grid grid-3" style="margin-bottom:20px;">
-          <div class="card">
-            <div class="card-title">Spese fisse mensili</div>
-            <div class="stat-value" style="color:var(--amber); font-size:17px;">${euro(totalFisseMensili)}</div>
-            <div class="row-sub" style="margin-top:4px;">${db.fisse.length} voci</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Obiettivi attivi</div>
-            <div class="stat-value" style="font-size:17px;">${db.obiettivi.length}</div>
-            <div class="row-sub" style="margin-top:4px;">${obiettiviTop.length? Math.round((obiettiviTop.reduce((s,o)=>s+(o.target?o.current/o.target:0),0)/obiettiviTop.length)*100)+'% medio' : 'nessuno'}</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Lista acquisti</div>
-            <div class="stat-value" style="font-size:17px;">${euro(acquistiPendingTotal)}</div>
-            <div class="row-sub" style="margin-top:4px;">${acquistiPending.length} da comprare</div>
-          </div>
-        </div>
-
-        <div class="section-title">Transazioni recenti <span class="count">${movimentiRecenti.length}</span></div>
-        <div class="list">
-          ${movimentiRecenti.length ? movimentiRecenti.map(m=>{
-            const isTrasf = m.type==='trasferimento';
-            const isUscita = m.type==='uscita';
-            const acc = !isTrasf ? db.accounts.find(a=>a.id===m.accountId) : null;
-            const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,55,95,0.14)':'var(--mint-dim)');
-            const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF375F':'var(--mint)');
-            const iconPath = isTrasf ? '<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>' : (isUscita ? '<path d="M12 5v14M19 12l-7 7-7-7"/>' : '<path d="M12 19V5M5 12l7-7 7 7"/>');
-            return `<div class="row-item">
-              <div class="row-icon" style="background:${iconBg}; color:${iconColor};">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${iconPath}</svg>
-              </div>
-              <div class="row-main"><div class="row-title">${esc(m.name)}</div><div class="row-sub">${acc?esc(acc.name):fmtDate(m.date)}</div></div>
-              <div class="row-amount" style="color:${isTrasf?'var(--blue)':(isUscita?'var(--coral)':'var(--mint)')}">${isTrasf?'':(isUscita?'−':'+')} ${euro(m.amount)}</div>
-            </div>`;
-        }).join('') : emptyState('Nessun movimento ancora. Registra una spesa o un\u2019entrata per iniziare.')}
-      </div>
-
-      <div class="section-title" style="margin-top:24px;">Azioni rapide</div>
-      ${quickActionsHtml}
-
-      <div class="section-title">Obiettivi in evidenza <span class="count">${db.obiettivi.length}</span></div>
-      <div class="grid grid-2">
-        ${obiettiviCardsHtml}
-      </div>
-      </div>
-    `;
-    return;
-  }
-
-  document.getElementById('mobile-dash-root').innerHTML = '';
-  document.getElementById('page-dashboard').innerHTML = `
-    <div class="topbar">
-      <div>
-        <div class="page-title">Dashboard</div>
-        <div class="page-sub">Panoramica generale del tuo denaro, ${esc(session.name)}.</div>
-      </div>
-      ${trendPct!==null ? `<div class="stat-trend ${trendAbs>=0?'up':'down'}" style="font-size:13px;">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
-        ${trendAbs>=0?'+':''}${trendPct.toFixed(1)}% negli ultimi 30gg
-      </div>` : ''}
+      <button class="qa-btn" onclick="modalTask()"><span class="qa-icon" style="background:rgba(48,209,88,0.14); color:var(--mint);">+</span>Task</button>
     </div>
 
-    ${quickActionsHtml}
-
-    <div class="grid grid-3" style="margin-top:20px;">
+    <div class="grid grid-4" style="margin-top:20px;">
+      <div class="card" style="cursor:pointer;" onclick="goToPage('task')">
+        <div class="card-title">Task</div>
+        <div class="stat-value" style="font-size:20px;">${taskPending.length}</div>
+        <div class="stat-trend" style="color:var(--text-faint)">${taskPending.length ? 'da fare' : 'Tutto completato'}</div>
+      </div>
       <div class="card">
         <div class="card-title">Spese fisse mensili</div>
         <div class="stat-value" style="color:var(--amber); font-size:20px;">${euro(totalFisseMensili)}</div>
@@ -745,7 +629,15 @@ function renderDashboard(){
 
     <div class="section-title">Obiettivi in evidenza <span class="count">${db.obiettivi.length}</span></div>
     <div class="grid grid-3">
-      ${obiettiviCardsHtml}
+      ${obiettiviTop.length ? obiettiviTop.map(o=>{
+        const pct = Math.min(100, (o.current/o.target*100)||0);
+        return `<div class="card">
+          <div class="card-title">${esc(o.name)}</div>
+          <div class="stat-value" style="margin-top:6px; font-size:18px;">${euro(o.current)} <span style="color:var(--text-faint); font-size:12.5px; font-weight:500;">/ ${euro(o.target)}</span></div>
+          <div class="progress-track"><div class="progress-fill" style="width:${pct}%; background:${o.color};"></div></div>
+          <div class="row-sub" style="margin-top:8px;">${pct.toFixed(0)}% raggiunto</div>
+        </div>`;
+      }).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun obiettivo. Creane uno per iniziare a risparmiare.')}</div>`}
     </div>
   `;
 
@@ -1042,12 +934,12 @@ function drawCategorieChart(speseCategoria){
     }
   });
 }
-function modalMovimento(id, presetType){
+function modalMovimento(id){
   if(!db.accounts.length) return toast('Crea prima almeno un conto.');
   const isEdit = !!id;
   const m = isEdit ? db.movimenti.find(x=>x.id===id) : null;
   if(m && m.rettifica) return toast('Le rettifiche di saldo non sono modificabili: cambia di nuovo il saldo dal conto se serve.');
-  const tipo = m ? m.type : (presetType || 'uscita');
+  const tipo = m ? m.type : 'uscita';
   const accOptions = (selected)=> db.accounts.map(a=>`<option value="${a.id}" ${selected===a.id?'selected':''}>${esc(a.name)}</option>`).join('');
   const catOptions = (selected)=> CATEGORIE.map(c=>`<option value="${c.key}" ${(selected||'altro')===c.key?'selected':''}>${esc(c.label)}</option>`).join('');
   openModal(`
@@ -1986,6 +1878,246 @@ function modalStoricoObiettivo(id){
     </div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Chiudi</button></div>
   `);
+}
+
+/* ==================== TASK — To-Do list con sotto-task ==================== */
+let taskExpanded = new Set(); // stato solo di sessione: quali task hanno la checklist aperta
+
+function taskProgress(t){
+  const subs = t.subtasks || [];
+  const total = subs.length;
+  const done = subs.filter(s=>s.done).length;
+  return { total, done, pct: total ? Math.round(done/total*100) : 0 };
+}
+
+function renderTask(){
+  const f = filters.task;
+  const pending = db.tasks.filter(t=>!t.done);
+  const subtasksAperti = db.tasks.reduce((s,t)=> s + (t.subtasks||[]).filter(st=>!st.done).length, 0);
+  const completatiTotali = db.tasks.filter(t=>t.done).length;
+
+  // L'ordine manuale (trascinamento) viene preservato: ordiniamo solo per stato
+  // completato/non completato (i completati vanno in fondo), il sort è stabile
+  // quindi a parità di stato l'ordine dell'array (db.tasks) resta quello scelto dall'utente.
+  let list = db.tasks.slice().sort((a,b)=> (a.done?1:0) - (b.done?1:0));
+  const dragDisabled = !!f.q;
+  if(f.q) list = list.filter(t=> matches(t.text,f.q) || matches(t.note,f.q) || (t.subtasks||[]).some(st=>matches(st.text,f.q)));
+
+  document.getElementById('page-task').innerHTML = `
+    <div class="topbar">
+      <div><div class="page-title">Task</div><div class="page-sub">${pending.length} da fare${subtasksAperti?' · '+subtasksAperti+' sotto-task aperti':''}</div></div>
+      <div class="topbar-actions"><button class="btn btn-primary" onclick="modalTask()">+ Nuovo task</button></div>
+    </div>
+
+    ${db.tasks.length ? `
+    <div class="grid grid-3" style="margin-bottom:20px;">
+      <div class="card">
+        <div class="card-title">Da fare</div>
+        <div class="stat-value" style="font-size:20px;">${pending.length}</div>
+        <div class="stat-trend" style="color:var(--text-faint)">task ancora aperti</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Sotto-task aperti</div>
+        <div class="stat-value" style="font-size:20px;">${subtasksAperti}</div>
+        <div class="stat-trend" style="color:var(--text-faint)">voci nelle checklist</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Completati</div>
+        <div class="stat-value" style="color:var(--mint); font-size:20px;">${completatiTotali}</div>
+        <div class="stat-trend" style="color:var(--text-faint)">su ${db.tasks.length} task totali</div>
+      </div>
+    </div>
+    ` : ''}
+
+    ${searchBar('task','Cerca task o sotto-task...')}
+    <div class="task-list" id="task-list">
+      ${list.length ? list.map(t=>taskCardHtml(t, dragDisabled)).join('') : emptyState(db.tasks.length ? 'Nessun task corrisponde alla ricerca.' : 'Nessun task ancora. Aggiungi il primo lavoro da fare e organizzalo in sotto-task.')}
+    </div>
+  `;
+  attachTaskDragHandlers();
+}
+
+function taskCardHtml(t, dragDisabled){
+  const subs = t.subtasks || [];
+  const { total, done, pct } = taskProgress(t);
+  const expanded = taskExpanded.has(t.id);
+  const overdue = t.dueDate && !t.done && daysUntil(t.dueDate) < 0;
+  const prColor = t.priority==='Alta' ? 'var(--coral)' : t.priority==='Media' ? 'var(--amber)' : t.priority==='Bassa' ? 'var(--blue)' : null;
+  const prBg = t.priority==='Alta' ? 'var(--coral-dim)' : t.priority==='Media' ? 'var(--amber-dim)' : t.priority==='Bassa' ? 'var(--blue-dim)' : null;
+
+  return `
+  <div class="task-card ${t.done?'done':''} ${expanded?'expanded':''} ${overdue?'overdue':''}" data-task-id="${t.id}">
+    <div class="task-head" onclick="toggleTaskExpand('${t.id}')">
+      ${dragDisabled ? '' : `<div class="task-drag-handle" title="Trascina per riordinare" onclick="event.stopPropagation()"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></div>`}
+      <div class="task-check-wrap" onclick="event.stopPropagation(); toggleTask('${t.id}')">
+        <div class="task-check ${t.done?'checked':''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></div>
+      </div>
+      <div class="task-main">
+        <div class="task-title-row">
+          <div class="task-title ${t.done?'done':''}">${esc(t.text)}</div>
+        </div>
+        ${t.note ? `<div class="task-note">${esc(t.note)}</div>` : ''}
+        <div class="task-meta-row">
+          ${t.priority ? `<span class="task-pill" style="background:${prBg}; color:${prColor};">${esc(t.priority)}</span>` : ''}
+          ${t.dueDate ? `<span class="task-pill" style="background:${overdue?'var(--coral-dim)':'var(--surface-2)'}; color:${overdue?'var(--coral)':'var(--text-dim)'};">${overdue?'Scaduto ':''}${fmtDate(t.dueDate)}</span>` : ''}
+          ${total ? `<span class="task-pill" style="background:var(--surface-2); color:var(--text-dim);">${done}/${total} sotto-task</span>` : ''}
+        </div>
+        ${total ? `<div class="task-progress-mini"><div class="progress-track"><div class="progress-fill" style="width:${pct}%; background:${done===total?'var(--mint)':'var(--blue)'};"></div></div><span>${pct}%</span></div>` : ''}
+      </div>
+      <div class="task-actions" onclick="event.stopPropagation()">
+        <button class="icon-btn" onclick="modalTask('${t.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
+        <button class="icon-btn btn-danger" onclick="deleteItem('tasks','${t.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></button>
+      </div>
+      <button class="task-expand-btn" onclick="event.stopPropagation(); toggleTaskExpand('${t.id}')" title="Mostra sotto-task">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </div>
+    ${expanded ? `
+    <div class="task-body">
+      <div class="subtask-list">
+        ${subs.length ? subs.map(st=>`
+          <div class="subtask-item">
+            <input type="checkbox" class="subtask-check" ${st.done?'checked':''} onchange="toggleSubtask('${t.id}','${st.id}')">
+            <div class="subtask-text ${st.done?'done':''}">${esc(st.text)}</div>
+            <button class="subtask-del" onclick="deleteSubtask('${t.id}','${st.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>
+        `).join('') : `<div class="row-sub" style="padding:4px;">Nessun sotto-task ancora. Suddividi questo lavoro in passi più piccoli.</div>`}
+      </div>
+      <div class="add-subtask-row">
+        <input type="text" id="subtask-input-${t.id}" placeholder="Aggiungi un sotto-task..." onkeydown="if(event.key==='Enter'){addSubtask('${t.id}')}">
+        <button onclick="addSubtask('${t.id}')">+ Aggiungi</button>
+      </div>
+    </div>
+    ` : ''}
+  </div>`;
+}
+
+function toggleTaskExpand(id){
+  if(taskExpanded.has(id)) taskExpanded.delete(id); else taskExpanded.add(id);
+  renderTask();
+}
+
+/* ---- Riordino task via trascinamento (Pointer Events: funziona con mouse e touch) ---- */
+let taskDrag = null;
+function attachTaskDragHandlers(){
+  document.querySelectorAll('#task-list .task-drag-handle').forEach(handle=>{
+    handle.addEventListener('pointerdown', onTaskDragStart);
+  });
+}
+function onTaskDragStart(e){
+  e.preventDefault(); e.stopPropagation();
+  const card = e.currentTarget.closest('.task-card');
+  const listEl = document.getElementById('task-list');
+  if(!card || !listEl) return;
+  taskDrag = { id: card.dataset.taskId, card, listEl, startY: e.clientY, dropBeforeId: undefined };
+  card.classList.add('dragging');
+  document.body.style.userSelect = 'none';
+  document.addEventListener('pointermove', onTaskDragMove);
+  document.addEventListener('pointerup', onTaskDragEnd);
+}
+function onTaskDragMove(e){
+  if(!taskDrag) return;
+  const dy = e.clientY - taskDrag.startY;
+  taskDrag.card.style.transform = `translateY(${dy}px)`;
+  taskDrag.card.style.zIndex = 10;
+  const siblings = Array.from(taskDrag.listEl.children).filter(c=>c!==taskDrag.card && c.classList.contains('task-card'));
+  siblings.forEach(c=>c.classList.remove('drag-over-top'));
+  let target = null;
+  for(const c of siblings){
+    const rect = c.getBoundingClientRect();
+    if(e.clientY < rect.top + rect.height/2){ target = c; break; }
+  }
+  if(target){ target.classList.add('drag-over-top'); taskDrag.dropBeforeId = target.dataset.taskId; }
+  else { taskDrag.dropBeforeId = null; } // null = sposta in fondo al gruppo
+}
+function onTaskDragEnd(){
+  if(!taskDrag) return;
+  document.removeEventListener('pointermove', onTaskDragMove);
+  document.removeEventListener('pointerup', onTaskDragEnd);
+  document.body.style.userSelect = '';
+  const { id, dropBeforeId } = taskDrag;
+  taskDrag.card.classList.remove('dragging');
+  taskDrag.card.style.transform = '';
+  taskDrag.card.style.zIndex = '';
+  document.querySelectorAll('#task-list .task-card').forEach(c=>c.classList.remove('drag-over-top'));
+  taskDrag = null;
+  if(dropBeforeId !== undefined) reorderTask(id, dropBeforeId);
+}
+function reorderTask(id, dropBeforeId){
+  const fromIdx = db.tasks.findIndex(t=>t.id===id);
+  if(fromIdx<0) return;
+  const [moved] = db.tasks.splice(fromIdx,1);
+  if(dropBeforeId){
+    let toIdx = db.tasks.findIndex(t=>t.id===dropBeforeId);
+    if(toIdx<0) toIdx = db.tasks.length;
+    db.tasks.splice(toIdx,0,moved);
+  } else {
+    db.tasks.push(moved);
+  }
+  saveDB(); renderTask();
+}
+
+function modalTask(id){
+  const isEdit = !!id;
+  const t = isEdit ? db.tasks.find(x=>x.id===id) : null;
+  openModal(`
+    <h3>${isEdit?'Modifica task':'Nuovo task'}</h3>
+    <div class="field"><label>Cosa c'è da fare</label><input id="f-name" value="${t?esc(t.text):''}" placeholder="Es. Completare il report mensile"></div>
+    <div class="field"><label>Note (opzionale)</label><input id="f-note" value="${t?esc(t.note||''):''}" placeholder="Dettagli aggiuntivi"></div>
+    <div class="field-row">
+      <div class="field"><label>Priorità</label><select id="f-priority">
+        <option value="" ${t&&!t.priority?'selected':''}>—</option>
+        <option value="Bassa" ${t&&t.priority==='Bassa'?'selected':''}>Bassa</option>
+        <option value="Media" ${t&&t.priority==='Media'?'selected':''}>Media</option>
+        <option value="Alta" ${t&&t.priority==='Alta'?'selected':''}>Alta</option>
+      </select></div>
+      <div class="field"><label>Scadenza (opzionale)</label><input id="f-due" type="date" value="${t?t.dueDate||'':''}"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="saveTask('${id||''}')">${isEdit?'Salva':'Aggiungi'}</button>
+    </div>
+  `);
+}
+function saveTask(id){
+  const text = document.getElementById('f-name').value.trim();
+  const note = document.getElementById('f-note').value.trim();
+  const priority = document.getElementById('f-priority').value;
+  const dueDate = document.getElementById('f-due').value;
+  if(!text) return toast('Inserisci una descrizione.');
+  if(id){
+    const t = db.tasks.find(x=>x.id===id);
+    t.text=text; t.note=note; t.priority=priority; t.dueDate=dueDate;
+  } else {
+    db.tasks.push({ id:uid(), text, note, priority, dueDate, done:false, subtasks:[] });
+  }
+  saveDB(); closeModal(); renderAll(); toast(id?'Task aggiornato.':'Task aggiunto.');
+}
+function toggleTask(id){ const t=db.tasks.find(x=>x.id===id); t.done=!t.done; saveDB(); renderTask(); updateBadge(); }
+
+function addSubtask(taskId){
+  const input = document.getElementById('subtask-input-'+taskId);
+  const text = input.value.trim();
+  if(!text) return;
+  const t = db.tasks.find(x=>x.id===taskId);
+  if(!t.subtasks) t.subtasks = [];
+  t.subtasks.push({ id:uid(), text, done:false });
+  taskExpanded.add(taskId);
+  saveDB(); renderTask(); updateBadge();
+  const newInput = document.getElementById('subtask-input-'+taskId);
+  if(newInput) newInput.focus();
+}
+function toggleSubtask(taskId, subId){
+  const t = db.tasks.find(x=>x.id===taskId);
+  const st = (t.subtasks||[]).find(x=>x.id===subId);
+  if(!st) return;
+  st.done = !st.done;
+  saveDB(); renderTask(); updateBadge();
+}
+function deleteSubtask(taskId, subId){
+  const t = db.tasks.find(x=>x.id===taskId);
+  t.subtasks = (t.subtasks||[]).filter(x=>x.id!==subId);
+  saveDB(); renderTask(); updateBadge();
 }
 
 /* ==================== LISTA ACQUISTI ==================== */
