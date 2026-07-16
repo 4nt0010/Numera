@@ -737,6 +737,11 @@ input,select{ font-family:inherit; }
 
 /* ----- mobile: telefono in verticale, layout stile app bancaria ----- */
 @media (max-width:900px) and (orientation:portrait){
+  /* schermata di login: niente testo nascosto, tutto il blocco scende più in basso
+     con spazio per la notch, invece di stare incollato in alto */
+  #login-screen{ padding:24px; align-items:flex-start; padding-top:calc(64px + env(safe-area-inset-top)); }
+  .hero-copy{ max-width:none; width:100%; }
+
   /* niente più "riquadro bianco su sfondo scuro": su mobile lo sfondo pagina
      stesso diventa chiaro, così non esiste alcun pannello separato che possa
      disallinearsi, avere ombre proprie o mostrare il verde scuro sotto in caso
@@ -812,15 +817,17 @@ input,select{ font-family:inherit; }
   .sidebar{
     position:fixed; left:0; top:0; height:100vh; height:100dvh; z-index:50; border-radius:0; border:none;
     transform:translateX(-105%); transition:transform .25s ease; box-shadow:none;
+    padding-top:calc(22px + env(safe-area-inset-top));
+    padding-bottom:calc(22px + env(safe-area-inset-bottom));
   }
   .sidebar.open{ transform:translateX(0); box-shadow:24px 0 60px -20px rgba(0,0,0,0.6); }
   .sidebar-close-btn{ display:flex !important; }
   .bottom-nav{
-    display:flex; position:fixed; left:10px; right:10px; bottom:10px; z-index:40;
+    display:flex; position:fixed; left:10px; right:10px; bottom:calc(10px + env(safe-area-inset-bottom)); z-index:40;
     background:rgba(9,13,11,0.75); backdrop-filter:var(--glass-blur); -webkit-backdrop-filter:var(--glass-blur);
     border:1px solid var(--border-soft); border-radius:24px;
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 6px 16px -4px rgba(0,0,0,0.35);
-    padding:7px 4px calc(7px + env(safe-area-inset-bottom));
+    padding:7px 4px;
   }
   /* impedisce lo zoom automatico di iOS/Chrome quando si apre una tastiera su un campo */
   .field input, .field select, .modal .field input, .modal .field select, .modal .field textarea,
