@@ -635,6 +635,24 @@ function renderDashboard(){
       </div>
 
       <div class="mobile-dash-sheet">
+        ${trendPct!==null ? `
+        <div class="trend-banner ${trendAbs>=0?'up':'down'}">
+          <span class="trend-banner-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg></span>
+          <span class="trend-banner-label">Andamento ultimi 30 giorni</span>
+          <span class="trend-banner-amount">${trendAbs>=0?'+':'−'} ${euro(Math.abs(trendAbs))}</span>
+          <span class="trend-banner-pct">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
+            ${trendAbs>=0?'+':'−'}${Math.abs(trendPct).toFixed(1)}%
+          </span>
+          <span class="trend-banner-sub">Da ${euro(trendRef)} a ${euro(totalConti)} sul totale conti</span>
+        </div>
+        ` : `
+        <div class="trend-banner flat">
+          <span class="trend-banner-label">Andamento ultimi 30 giorni</span>
+          <span class="trend-banner-sub">Servono almeno due rilevazioni per calcolare la variazione: torna a trovarci tra qualche giorno.</span>
+        </div>
+        `}
+
         <div class="spend-summary">
           <div class="spend-summary-text">
             <div class="spend-summary-label">Spesa questo mese</div>
@@ -687,6 +705,17 @@ function renderDashboard(){
           }).join('') : emptyState("Nessun movimento ancora. Registra una spesa o un'entrata per iniziare.")}
         </div>
 
+        <div class="grid grid-2" style="margin-top:20px;">
+          <div class="card">
+            <div class="card-title">Andamento denaro attuale</div>
+            <div style="height:200px; margin-top:10px;"><canvas id="chart-trend"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="card-title">Ripartizione conti</div>
+            <div style="height:200px; margin-top:10px;"><canvas id="chart-breakdown"></canvas></div>
+          </div>
+        </div>
+
         <div class="section-title" style="margin-top:24px;">Azioni rapide</div>
         ${quickActionsHtml}
 
@@ -696,6 +725,8 @@ function renderDashboard(){
         </div>
       </div>
     `;
+    drawTrendChart(snaps);
+    drawBreakdownChart();
     return;
   }
 
