@@ -806,9 +806,9 @@ input,select{ font-family:inherit; }
 
   .sidebar{
     position:fixed; left:0; top:0; height:100vh; height:100dvh; z-index:50; border-radius:0; border:none;
-    transform:translateX(-105%); transition:transform .25s ease; box-shadow:24px 0 60px -20px rgba(0,0,0,0.6);
+    transform:translateX(-105%); transition:transform .25s ease; box-shadow:none;
   }
-  .sidebar.open{ transform:translateX(0); }
+  .sidebar.open{ transform:translateX(0); box-shadow:24px 0 60px -20px rgba(0,0,0,0.6); }
   .sidebar-close-btn{ display:flex !important; }
   .bottom-nav{
     display:flex; position:fixed; left:10px; right:10px; bottom:10px; z-index:40;
@@ -848,8 +848,8 @@ input,select{ font-family:inherit; }
   .mobile-dash-hero{
     position:relative; overflow:hidden; flex-shrink:0;
     background:linear-gradient(160deg, rgba(28,48,36,0.98), rgba(6,14,10,1));
-    margin:0; padding:26px 20px 32px;
-    padding-top:calc(26px + env(safe-area-inset-top));
+    margin:-100px 0 0 0; padding:126px 20px 32px;
+    padding-top:calc(126px + env(safe-area-inset-top));
     color:#F5F8F6;
   }
   .mobile-dash-hero::after{
