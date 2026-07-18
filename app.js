@@ -86,6 +86,8 @@ function seedDB(){
     stipendi: [],
     movimenti: [],
     budget: {},
+    oreSettimanali: 40,
+    risparmiatoRinunce: 0,
   };
 }
 
@@ -109,6 +111,10 @@ window.addEventListener('resize', ()=>{
     if(activePage && activePage.id==='page-dashboard' && typeof renderDashboard==='function') renderDashboard();
   }, 200);
 });
+setInterval(()=>{
+  const activePage = document.querySelector('.page.active');
+  if(activePage && activePage.id==='page-acquisti' && typeof renderAcquisti==='function' && db) renderAcquisti();
+}, 60000);
 
 /* ---------------- state ---------------- */
 let db = null;
@@ -235,6 +241,9 @@ async function startSession(name, userId){
   }
   if(!db.movimenti) db.movimenti = [];
   if(!db.budget) db.budget = {};
+  if(!db.oreSettimanali) db.oreSettimanali = 40;
+  if(!db.risparmiatoRinunce) db.risparmiatoRinunce = 0;
+  if(!db.tasks) db.tasks = [];
   snapshots = await fbLoadSnapshots(userId);
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').classList.add('active');
@@ -322,6 +331,24 @@ function computeTrendPct(currentTotal){
   if(!past || !past.total) return null;
   const pct = ((currentTotal - past.total) / Math.abs(past.total)) * 100;
   return isFinite(pct) ? pct : null;
+}
+function getStipendioMensileTotale(){
+  return db.stipendi.reduce((s,st)=> s + Number(st.base||0), 0);
+}
+function getTariffaOraria(){
+  const mensile = getStipendioMensileTotale();
+  const oreSett = Number(db.oreSettimanali) || 40;
+  if(!mensile || !oreSett) return 0;
+  const oreMensili = oreSett * 4.345; // media di settimane in un mese
+  return mensile / oreMensili;
+}
+function oreLavoroTesto(prezzo){
+  const tariffa = getTariffaOraria();
+  if(!tariffa || !prezzo) return null;
+  const ore = prezzo / tariffa;
+  if(ore < 1) return Math.round(ore*60) + ' min di lavoro';
+  if(ore < 10) return ore.toFixed(1).replace(/\.0$/,'') + ' h di lavoro';
+  return Math.round(ore) + ' h di lavoro';
 }
 function renderKpiBar(){
   const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
@@ -2072,7 +2099,6 @@ function renderTask(){
   const f = filters.task;
   const pending = db.tasks.filter(t=>!t.done);
   const subtasksAperti = db.tasks.reduce((s,t)=> s + (t.subtasks||[]).filter(st=>!st.done).length, 0);
-  const completatiTotali = db.tasks.filter(t=>t.done).length;
 
   // L'ordine manuale (trascinamento) viene preservato: ordiniamo solo per stato
   // completato/non completato (i completati vanno in fondo), il sort è stabile
@@ -2086,26 +2112,6 @@ function renderTask(){
       <div><div class="page-title">Task</div><div class="page-sub">${pending.length} da fare${subtasksAperti?' · '+subtasksAperti+' sotto-task aperti':''}</div></div>
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalTask()">+ Nuovo task</button></div>
     </div>
-
-    ${db.tasks.length ? `
-    <div class="grid grid-3" style="margin-bottom:20px;">
-      <div class="card">
-        <div class="card-title">Da fare</div>
-        <div class="stat-value" style="font-size:20px;">${pending.length}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">task ancora aperti</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Sotto-task aperti</div>
-        <div class="stat-value" style="font-size:20px;">${subtasksAperti}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">voci nelle checklist</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Completati</div>
-        <div class="stat-value" style="color:var(--mint); font-size:20px;">${completatiTotali}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">su ${db.tasks.length} task totali</div>
-      </div>
-    </div>
-    ` : ''}
 
     ${searchBar('task','Cerca task o sotto-task...')}
     <div class="task-list" id="task-list">
@@ -2305,10 +2311,18 @@ function renderAcquisti(){
   const totalPending = pending.reduce((s,a)=>s+Number(a.price||0)*Number(a.qty||1),0);
   let list = db.acquisti.slice().sort((a,b)=>a.bought-b.bought);
   if(f.q) list = list.filter(a=> matches(a.name,f.q));
+  const now = Date.now();
+  const risparmiato = Number(db.risparmiatoRinunce)||0;
   document.getElementById('page-acquisti').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Lista Acquisti</div><div class="page-sub">${pending.length} da comprare · ${euro(totalPending)} previsti</div></div>
-      <div class="topbar-actions"><button class="btn btn-primary" onclick="modalAcquisto()">+ Aggiungi</button></div>
+      <div>
+        <div class="page-title">Lista Acquisti</div>
+        <div class="page-sub">${pending.length} da comprare · ${euro(totalPending)} previsti${risparmiato>0?` · <span style="color:var(--mint-strong); font-weight:700;">${euro(risparmiato)} risparmiati rinunciando</span>`:''}</div>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn" onclick="modalOreSettimanali()" title="Imposta le ore settimanali usate per calcolare il costo in ore di lavoro">⏱ ${db.oreSettimanali||40} h/sett.</button>
+        <button class="btn btn-primary" onclick="modalAcquisto()">+ Aggiungi</button>
+      </div>
     </div>
     ${searchBar('acquisti','Cerca articolo...')}
     <div class="list">
@@ -2316,19 +2330,42 @@ function renderAcquisti(){
         const qty = Number(a.qty||1);
         const totale = Number(a.price||0) * qty;
         const giorniRimasti = a.speseRegistrata && a.dataSpesa ? Math.max(0, 3 - Math.floor((new Date(oggiStr()) - new Date(a.dataSpesa))/86400000)) : null;
+        const inRiflessione = a.cooldownUntil && !a.bought;
+        const scaduta = inRiflessione && new Date(a.cooldownUntil).getTime() <= now;
+        const oreTesto = oreLavoroTesto(totale);
+        let subRow;
+        if(a.speseRegistrata){
+          subRow = `<div class="row-sub">Spesa registrata · verrà rimosso ${giorniRimasti===0?'oggi':'tra '+giorniRimasti+' giorn'+(giorniRimasti===1?'o':'i')}</div>`;
+        } else if(inRiflessione && !scaduta){
+          const msRimasti = new Date(a.cooldownUntil).getTime() - now;
+          const oreRim = Math.floor(msRimasti/3600000), minRim = Math.floor((msRimasti%3600000)/60000);
+          subRow = `<div class="row-sub" style="color:var(--amber);">⏳ Ci stai pensando: ancora ${oreRim>0?oreRim+'h ':''}${minRim}min</div>`;
+        } else if(a.priority || oreTesto){
+          subRow = `<div class="row-sub">${a.priority?'Priorità: '+esc(a.priority):''}${a.priority&&oreTesto?' · ':''}${oreTesto?'≈ '+oreTesto:''}</div>`;
+        } else subRow = '';
         return `
-        <div class="row-item" style="${a.bought?'opacity:.65;':''}">
-          <div class="chip-check"><input type="checkbox" ${a.bought?'checked':''} onchange="toggleAcquisto('${a.id}')"></div>
+        <div class="row-item" style="${a.bought?'opacity:.65;':''} flex-wrap:wrap;">
+          <div class="chip-check"><input type="checkbox" ${a.bought?'checked':''} onchange="toggleAcquisto('${a.id}')" ${inRiflessione&&!scaduta?'disabled title="Rifletti ancora prima di comprarlo"':''}></div>
           <div class="row-main">
             <div class="row-title" style="${a.bought?'text-decoration:line-through;':''}">${esc(a.name)}${qty>1?` <span style="color:var(--text-faint); font-weight:500;">× ${qty}</span>`:''}</div>
-            ${a.speseRegistrata ? `<div class="row-sub">Spesa registrata · verrà rimosso ${giorniRimasti===0?'oggi':'tra '+giorniRimasti+' giorn'+(giorniRimasti===1?'o':'i')}</div>` : a.priority?`<div class="row-sub">Priorità: ${esc(a.priority)}</div>`:''}
+            ${subRow}
           </div>
           <div class="row-amount">${a.price?euro(totale):'—'}</div>
           <div class="row-actions">
             ${a.bought && !a.speseRegistrata ? `<button class="icon-btn" style="color:var(--coral)" title="Segna come spesa" onclick="modalSpesaAcquisto('${a.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></button>` : ''}
+            ${!a.bought && !inRiflessione && oreTesto ? `<button class="icon-btn" style="color:var(--amber)" title="Fammi riflettere prima di comprarlo" onclick="modalRiflessione('${a.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></button>` : ''}
             <button class="icon-btn" onclick="modalAcquisto('${a.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
             <button class="icon-btn btn-danger" onclick="deleteItem('acquisti','${a.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></button>
           </div>
+          ${scaduta ? `
+          <div style="flex:1 1 100%; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; padding:10px 12px; border-radius:12px; background:var(--amber-dim);">
+            <span style="font-size:12.5px; font-weight:600; color:var(--amber);">Il tempo per riflettere è finito: lo vuoi ancora?</span>
+            <div style="display:flex; gap:8px; flex-shrink:0;">
+              <button class="btn" style="padding:6px 12px; font-size:12px;" onclick="decisioneRiflessione('${a.id}', false)">No, rinuncio</button>
+              <button class="btn btn-primary" style="padding:6px 12px; font-size:12px;" onclick="decisioneRiflessione('${a.id}', true)">Sì, lo voglio</button>
+            </div>
+          </div>
+          ` : ''}
         </div>
       `;}).join('') : emptyState(db.acquisti.length ? 'Nessun articolo corrisponde alla ricerca.' : 'Lista vuota. Aggiungi il primo articolo.')}
     </div>
@@ -2411,6 +2448,69 @@ function saveAcquisto(id){
   saveDB(); closeModal(); renderAll(); toast(id?'Articolo aggiornato.':'Aggiunto alla lista.');
 }
 function toggleAcquisto(id){ const a=db.acquisti.find(x=>x.id===id); a.bought=!a.bought; saveDB(); renderAcquisti(); }
+
+function modalRiflessione(id){
+  const a = db.acquisti.find(x=>x.id===id);
+  if(!a) return;
+  const totale = Number(a.price||0) * Number(a.qty||1);
+  const oreTesto = oreLavoroTesto(totale);
+  openModal(`
+    <h3>Fammi riflettere prima</h3>
+    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">
+      "${esc(a.name)}" costa ${euro(totale)}${oreTesto?` — circa <strong style="color:var(--text);">${oreTesto}</strong>`:''}.
+      Scegli tra quanto tempo l'app ti chiederà "lo vuoi ancora?".
+    </p>
+    <div class="field"><label>Tempo per riflettere</label>
+      <select id="f-cooldown">
+        <option value="24">24 ore</option>
+        <option value="72" selected>3 giorni</option>
+        <option value="168">7 giorni</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="avviaRiflessione('${id}')">Avvia</button>
+    </div>
+  `);
+}
+function avviaRiflessione(id){
+  const a = db.acquisti.find(x=>x.id===id);
+  if(!a) return;
+  const ore = parseInt(document.getElementById('f-cooldown').value,10);
+  a.cooldownUntil = new Date(Date.now() + ore*3600000).toISOString();
+  a.cooldownHours = ore;
+  saveDB(); closeModal(); renderAll(); toast('Ok, te lo richiedo tra qualche giorno.');
+}
+function decisioneRiflessione(id, lovuoi){
+  const a = db.acquisti.find(x=>x.id===id);
+  if(!a) return;
+  const totale = Number(a.price||0) * Number(a.qty||1);
+  if(lovuoi){
+    delete a.cooldownUntil; delete a.cooldownHours;
+    saveDB(); renderAll(); toast('Va bene, resta nella lista.');
+  } else {
+    db.acquisti = db.acquisti.filter(x=>x.id!==id);
+    db.risparmiatoRinunce = Number(db.risparmiatoRinunce||0) + totale;
+    saveDB(); renderAll(); toast(`Bravo! ${euro(totale)} risparmiati.`);
+  }
+}
+function modalOreSettimanali(){
+  openModal(`
+    <h3>Ore di lavoro settimanali</h3>
+    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">Uso il tuo stipendio totale e queste ore per calcolare quanto "costano" in tempo di lavoro i tuoi acquisti.</p>
+    <div class="field"><label>Ore a settimana</label><input id="f-ore-sett" type="number" min="1" max="80" step="1" value="${db.oreSettimanali||40}"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="salvaOreSettimanali()">Salva</button>
+    </div>
+  `);
+}
+function salvaOreSettimanali(){
+  const ore = parseFloat(document.getElementById('f-ore-sett').value);
+  if(!ore || ore<=0) return toast('Inserisci un numero valido di ore.');
+  db.oreSettimanali = ore;
+  saveDB(); closeModal(); renderAll(); toast('Aggiornato.');
+}
 
 /* ==================== SIMULATORE (non tocca mai conti/movimenti reali) ==================== */
 let simState = { saldo: 0, movimenti: [] };
