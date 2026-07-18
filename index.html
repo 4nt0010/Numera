@@ -852,6 +852,7 @@ input,select{ font-family:inherit; }
      spariscono le bolle in alto e prende il loro posto la card verde "Saldo totale" */
   .main:has(#page-dashboard.active) .kpi-bar{ display:none; }
   .main.dash-active .kpi-bar{ display:none; }
+  .main:has(#page-task.active) .main-inner{ padding-top:calc(14px + env(safe-area-inset-top)); }
 
   #mobile-dash-root{ display:none; margin:0; padding:0; flex-direction:column; flex:1; }
   .main.dash-active #mobile-dash-root{ display:flex; }
