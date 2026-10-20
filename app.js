@@ -5,16 +5,16 @@
    - db.*           -> collections Firestore per utente
 ================================================================ */
 
-const ICON_COLORS = ['#3DDC84','#E4E4E7','#5CC8C2','#F5B544','#FF6B6B','#9AE6B4'];
+const ICON_COLORS = ['#30D158','#0A84FF','#FF9F0A','#FF453A','#BF5AF2','#64D2FF'];
 const CATEGORIE = [
-  { key:'casa', label:'Casa', color:'#5CC8C2' },
-  { key:'cibo', label:'Cibo e spesa', color:'#F2B84B' },
-  { key:'trasporti', label:'Trasporti', color:'#34D27B' },
-  { key:'svago', label:'Svago', color:'#C6F86B' },
-  { key:'salute', label:'Salute', color:'#FF6B5E' },
-  { key:'lavoro', label:'Lavoro', color:'#2DD4BF' },
-  { key:'risparmio', label:'Risparmio', color:'#86EFAC' },
-  { key:'altro', label:'Altro', color:'#7C8F84' },
+  { key:'casa', label:'Casa', color:'#0A84FF' },
+  { key:'cibo', label:'Cibo e spesa', color:'#FF9F0A' },
+  { key:'trasporti', label:'Trasporti', color:'#30D158' },
+  { key:'svago', label:'Svago', color:'#BF5AF2' },
+  { key:'salute', label:'Salute', color:'#FF453A' },
+  { key:'lavoro', label:'Lavoro', color:'#64D2FF' },
+  { key:'risparmio', label:'Risparmio', color:'#FFD60A' },
+  { key:'altro', label:'Altro', color:'#8E8E93' },
 ];
 function catInfo(key){ return CATEGORIE.find(c=>c.key===key) || CATEGORIE[CATEGORIE.length-1]; }
 const MEDAGLIE_SOGLIE = [25, 50, 75, 100];
@@ -559,299 +559,315 @@ function updateBadge(){
 
 /* ==================== DASHBOARD ==================== */
 let chartTrend, chartBreakdown;
-function renderDashboard(){
-  const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
-  const totalFisseMensili = db.fisse.reduce((s,a)=> s + (a.frequency==='annuale' ? a.amount/12 : a.amount), 0);
-  const acquistiPending = db.acquisti.filter(a=>!a.bought);
-  const acquistiPendingTotal = acquistiPending.reduce((s,a)=>s+Number(a.price||0)*Number(a.qty||1),0);
-  const taskPending = db.tasks.filter(t=>!t.done);
-  const obiettiviTop = [...db.obiettivi].sort((a,b)=>{
-    const pa = a.target? a.current/a.target : 0, pb = b.target? b.current/b.target : 0;
-    return pb-pa;
-  }).slice(0,3);
+/* ==================== DASHBOARD ====================
+   Una sola fonte di blocchi (dashBlocks) usata sia su desktop (griglia 12 colonne)
+   sia su mobile (colonna unica sotto la card Saldo). Ordine pensato per domande:
+   1) quanto ho?  2) cosa entra/esce questo mese?  3) cosa devo incassare / fare a breve?
+   4) dove sono i soldi e a che punto sono gli obiettivi?
+====================================================== */
+const ADD_ACTIONS = [
+  { label:'Spesa', fn:"modalMovimento(null,'uscita')", bg:'rgba(255,55,95,0.14)', color:'#FF375F' },
+  { label:'Entrata', fn:"modalMovimento(null,'entrata')", bg:'var(--mint-dim)', color:'var(--mint)' },
+  { label:'Trasferimento', fn:"modalMovimento(null,'trasferimento')", bg:'var(--blue-dim)', color:'var(--blue)' },
+  { label:'Evento', fn:'modalPreventivato()', bg:'var(--blue-dim)', color:'var(--blue)' },
+  { label:'Task', fn:'modalTask()', bg:'rgba(48,209,88,0.14)', color:'var(--mint)' },
+  { label:'Conto', fn:'modalAccount()', bg:'var(--mint-dim)', color:'var(--mint)' },
+  { label:'Mancante', fn:'modalMancante()', bg:'var(--coral-dim)', color:'var(--coral)' },
+  { label:'Spesa fissa', fn:'modalFissa()', bg:'var(--amber-dim)', color:'var(--amber)' },
+  { label:'Obiettivo', fn:'modalObiettivo()', bg:'rgba(178,124,255,0.14)', color:'#B27CFF' },
+  { label:'Acquisto', fn:'modalAcquisto()', bg:'rgba(79,209,232,0.14)', color:'#4FD1E8' },
+];
+function toggleAddMenu(e){
+  e.stopPropagation();
+  document.getElementById('add-menu')?.classList.toggle('open');
+}
+document.addEventListener('click', ()=> document.getElementById('add-menu')?.classList.remove('open'));
 
+function dashTrend(){
   const snaps = getSnapshots();
-  let trendPct = null, trendAbs = null, trendRef = null;
-  if(snaps.length >= 2){
-    const cutoff = Date.now() - 30*86400000;
-    const past = snaps.filter(s=> new Date(s.date).getTime() <= cutoff);
-    const ref = past.length ? past[past.length-1] : snaps[0];
-    trendAbs = totalConti - ref.total;
-    trendPct = ref.total !== 0 ? (trendAbs/ref.total*100) : null;
-    trendRef = ref.total;
-  }
+  const totalConti = computeTotals().totalConti;
+  if(snaps.length < 2) return null;
+  const cutoff = Date.now() - 30*86400000;
+  const past = snaps.filter(s=> new Date(s.date).getTime() <= cutoff);
+  const ref = past.length ? past[past.length-1] : snaps[0];
+  const abs = totalConti - ref.total;
+  return { abs, pct: ref.total ? abs/Math.abs(ref.total)*100 : null };
+}
+function plur(n, sing, plu){ return `${n} ${n===1?sing:plu}`; }
+function dashLink(label, page){ return `<button class="dash-link" onclick="goToPage('${page}')">${label} →</button>`; }
+const ICO_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg>';
 
-  const upcoming = [...db.preventivati].filter(p=>p.date).sort((a,b)=> new Date(a.date)-new Date(b.date)).slice(0,5);
+function dashBlocks(){
+  const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
+  const trend = dashTrend();
+  const meseCorrente = meseKeyFromDate(new Date());
+  const delMese = db.movimenti.filter(m=>(m.date||'').slice(0,7)===meseCorrente && !m.rettifica);
+  const uscite = delMese.filter(m=>m.type==='uscita').reduce((s,m)=>s+Number(m.amount),0);
+  const entrate = delMese.filter(m=>m.type==='entrata').reduce((s,m)=>s+Number(m.amount),0);
+  const perCat = {};
+  delMese.filter(m=>m.type==='uscita').forEach(m=>{ const k=m.category||'altro'; perCat[k]=(perCat[k]||0)+Number(m.amount); });
+  const topCat = CATEGORIE.filter(c=>perCat[c.key]).sort((a,b)=>perCat[b.key]-perCat[a.key]).slice(0,4);
+  const maxCat = topCat.length ? Math.max(...topCat.map(c=>Math.max(perCat[c.key], db.budget[c.key]||0))) : 1;
 
-  const quickActionsHtml = `
-    <div class="quick-actions">
-      <button class="qa-btn" onclick="modalMovimento()"><span class="qa-icon" style="background:rgba(255,107,94,0.14); color:#FF6B5E;">+</span>Spesa</button>
-      <button class="qa-btn" onclick="modalAccount()"><span class="qa-icon" style="background:var(--mint-dim); color:var(--mint);">+</span>Conto</button>
-      <button class="qa-btn" onclick="modalPreventivato()"><span class="qa-icon" style="background:var(--blue-dim); color:var(--blue);">+</span>Evento</button>
-      <button class="qa-btn" onclick="modalMancante()"><span class="qa-icon" style="background:var(--coral-dim); color:var(--coral);">+</span>Mancante</button>
-      <button class="qa-btn" onclick="modalFissa()"><span class="qa-icon" style="background:var(--amber-dim); color:var(--amber);">+</span>Spesa fissa</button>
-      <button class="qa-btn" onclick="modalObiettivo()"><span class="qa-icon" style="background:rgba(198,248,107,0.14); color:#C6F86B;">+</span>Obiettivo</button>
-      <button class="qa-btn" onclick="modalAcquisto()"><span class="qa-icon" style="background:rgba(92,200,194,0.14); color:#5CC8C2;">+</span>Acquisto</button>
-      <button class="qa-btn" onclick="modalTask()"><span class="qa-icon" style="background:rgba(52,210,123,0.14); color:var(--mint);">+</span>Task</button>
-    </div>
-  `;
-  const obiettiviCardsHtml = obiettiviTop.length ? obiettiviTop.map(o=>{
-    const pct = Math.min(100, (o.current/o.target*100)||0);
-    return `<div class="card">
-      <div class="card-title">${esc(o.name)}</div>
-      <div class="stat-value" style="margin-top:6px; font-size:18px;">${euro(o.current)} <span style="color:var(--text-faint); font-size:12.5px; font-weight:500;">/ ${euro(o.target)}</span></div>
-      <div class="progress-track"><div class="progress-fill" style="width:${pct}%; background:${o.color};"></div></div>
-      <div class="row-sub" style="margin-top:8px;">${pct.toFixed(0)}% raggiunto</div>
+  const eventi = [...db.preventivati].sort((a,b)=>(a.date||'2100').localeCompare(b.date||'2100')).slice(0,4);
+  const tasks = db.tasks.filter(t=>!t.done).sort((a,b)=>(a.dueDate||'2100').localeCompare(b.dueDate||'2100')).slice(0,5);
+  const recenti = db.movimenti.map((m,i)=>({m,i})).sort((a,b)=>{ const c=(b.m.date||'').localeCompare(a.m.date||''); return c!==0?c:b.i-a.i; }).slice(0,5).map(x=>x.m);
+  const fisseMese = db.fisse.reduce((s,a)=> s + (a.frequency==='annuale' ? a.amount/12 : a.amount), 0);
+  const acquistiPending = db.acquisti.filter(a=>!a.bought);
+
+  const trendHtml = trend
+    ? `<span class="dash-trend ${trend.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trend.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${trend.abs>=0?'+':'−'}${euro(Math.abs(trend.abs))}${trend.pct!==null?` · ${Math.abs(trend.pct).toFixed(1)}%`:''} in 30 giorni</span>`
+    : `<span class="dash-trend flat">L'andamento compare dopo qualche giorno di utilizzo</span>`;
+
+  const hero = (withChart)=>`
+    <div class="card dash-card dash-hero">
+      <div class="dash-hero-top">
+        <div>
+          <div class="dash-hero-label">Saldo sui conti</div>
+          <div class="dash-hero-amount">${euro(totalConti)}</div>
+        </div>
+        ${trendHtml}
+      </div>
+      ${withChart ? `<div class="dash-hero-chart"><canvas id="chart-trend"></canvas></div>` : ''}
+      <div class="dash-hero-stats">
+        <button class="dash-hero-stat" onclick="goToPage('preventivati')">
+          <div class="dash-hero-stat-label"><i style="background:var(--blue)"></i>Da incassare</div>
+          <div class="dash-hero-stat-value" style="color:var(--blue)">${euro(totalPrev)}</div>
+          <div class="dash-hero-stat-hint">${plur(db.preventivati.length,"evento","eventi")}</div>
+        </button>
+        <button class="dash-hero-stat" onclick="goToPage('mancanti')">
+          <div class="dash-hero-stat-label"><i style="background:var(--coral)"></i>Mancanti</div>
+          <div class="dash-hero-stat-value" style="color:var(--coral)">${euro(totalMancanti)}</div>
+          <div class="dash-hero-stat-hint">${plur(db.mancanti.length,"voce","voci")} in attesa</div>
+        </button>
+        <div class="dash-hero-stat" style="cursor:default;">
+          <div class="dash-hero-stat-label"><i style="background:var(--text)"></i>Totale previsto</div>
+          <div class="dash-hero-stat-value">${euro(totaleGenerale)}</div>
+          <div class="dash-hero-stat-hint">conti + in arrivo</div>
+        </div>
+      </div>
     </div>`;
-  }).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun obiettivo. Creane uno per iniziare a risparmiare.')}</div>`;
 
+  const mese = `
+    <div class="card dash-card">
+      <div class="dash-card-head"><div class="dash-card-title">${fmtMese(meseCorrente)}</div>${dashLink('Spese','spese')}</div>
+      <div class="month-stats">
+        <div class="month-stat"><div class="month-stat-label">Uscite</div><div class="month-stat-value" style="color:var(--coral)">${euro(uscite)}</div></div>
+        <div class="month-stat"><div class="month-stat-label">Entrate</div><div class="month-stat-value" style="color:var(--mint)">${euro(entrate)}</div></div>
+        <div class="month-stat"><div class="month-stat-label">Netto</div><div class="month-stat-value" style="color:${entrate-uscite>=0?'var(--text)':'var(--coral)'}">${euro(entrate-uscite)}</div></div>
+      </div>
+      ${topCat.length ? `<div class="mini-list">${topCat.map(c=>{
+        const lim = db.budget[c.key]||0, sp = perCat[c.key], over = lim && sp>lim;
+        return `<div class="mini-row" style="display:block;">
+          <div style="display:flex; justify-content:space-between; gap:10px; font-size:12.5px;">
+            <span style="font-weight:600;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${c.color}; margin-right:7px;"></span>${esc(c.label)}</span>
+            <span class="mini-amount" style="font-size:12.5px; ${over?'color:var(--coral)':''}">${euro(sp)}${lim?` <span style="color:var(--text-faint); font-weight:500;">/ ${euro(lim)}</span>`:''}</span>
+          </div>
+          <div class="mini-bar"><div style="width:${Math.min(100, sp/(lim||maxCat)*100)}%; background:${over?'var(--coral)':c.color};"></div></div>
+        </div>`;}).join('')}</div>`
+      : `<div class="empty-mini">Nessuna spesa questo mese. <button onclick="modalMovimento(null,'uscita')">Registrane una</button></div>`}
+    </div>`;
+
+  const eventiHtml = `
+    <div class="card dash-card">
+      <div class="dash-card-head"><div class="dash-card-title">Prossimi eventi <span class="count">${db.preventivati.length}</span></div>${dashLink('Tutti','preventivati')}</div>
+      ${eventi.length ? `<div class="mini-list">${eventi.map(p=>{
+        const st = prevStats(p), ts = prevTaskStats(p.id);
+        const d = p.date ? daysUntil(p.date) : null, urg = d!==null && d>=0 && d<=3;
+        return `<div class="mini-row clickable" onclick="openPrevDrawer('${p.id}')">
+          <div class="mini-dot" style="background:${p.color}22; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
+          <div class="mini-main">
+            <div class="mini-title">${esc(p.name)}</div>
+            <div class="mini-sub" style="${urg?'color:var(--amber)':''}">${quandoTesto(p.date)}${st.n?` · ${st.fatte}/${st.n} voci`:''}${ts.n?` · ${ts.fatte}/${ts.n} task`:''}</div>
+          </div>
+          <div class="mini-amount" style="color:var(--blue)">${euro(p.amount)}</div>
+        </div>`;}).join('')}</div>`
+      : `<div class="empty-mini">Nessun evento in programma. <button onclick="modalPreventivato()">Crea un evento</button></div>`}
+    </div>`;
+
+  const taskHtml = `
+    <div class="card dash-card">
+      <div class="dash-card-head"><div class="dash-card-title">Da fare <span class="count">${db.tasks.filter(t=>!t.done).length}</span></div>${dashLink('Tutte','task')}</div>
+      ${tasks.length ? `<div class="mini-list">${tasks.map(t=>{
+        const ev = t.prevId ? db.preventivati.find(p=>p.id===t.prevId) : null;
+        const over = t.dueDate && daysUntil(t.dueDate)<0;
+        return `<div class="mini-row">
+          <button class="mini-check" title="Completa" onclick="toggleTaskEvento('${t.id}')">${ICO_CHECK}</button>
+          <div class="mini-main" style="cursor:pointer;" onclick="${ev?`openPrevDrawer('${ev.id}')`:`modalTask('${t.id}')`}">
+            <div class="mini-title">${esc(t.text)}</div>
+            <div class="mini-sub">${ev?`<span style="color:var(--blue)">${esc(ev.name)}</span>`:'Generale'}${t.dueDate?` · <span style="${over?'color:var(--coral)':''}">${over?'scaduta ':''}${fmtDate(t.dueDate)}</span>`:''}</div>
+          </div>
+          ${t.priority==='Alta'?`<span class="pill" style="background:var(--coral-dim); color:var(--coral);">Alta</span>`:''}
+        </div>`;}).join('')}</div>`
+      : `<div class="empty-mini">Niente da fare. Ottimo!</div>`}
+      <div class="quick-task">
+        <input id="dash-task-input" placeholder="Aggiungi al volo una task…" onkeydown="if(event.key==='Enter'){aggiungiTaskDashboard()}">
+        <button class="btn btn-primary" style="padding:8px 14px;" onclick="aggiungiTaskDashboard()">+</button>
+      </div>
+    </div>`;
+
+  const contiHtml = `
+    <div class="card dash-card">
+      <div class="dash-card-head"><div class="dash-card-title">Conti <span class="count">${db.accounts.length}</span></div>${dashLink('Gestisci','conti')}</div>
+      ${db.accounts.length ? `<div class="mini-list">${db.accounts.map(a=>{
+        const pct = totalConti>0 ? Math.max(0, Number(a.balance)/totalConti*100) : 0;
+        return `<div class="mini-row" style="display:block;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div class="mini-dot" style="width:30px; height:30px; background:${a.color}22; color:${a.color}; font-size:11px;">${esc(a.icon||a.name.slice(0,2))}</div>
+            <div class="mini-main"><div class="mini-title">${esc(a.name)}</div></div>
+            <div class="mini-amount">${euro(a.balance)}</div>
+          </div>
+          <div class="mini-bar"><div style="width:${pct}%; background:${a.color};"></div></div>
+        </div>`;}).join('')}</div>`
+      : `<div class="empty-mini">Nessun conto. <button onclick="modalAccount()">Aggiungi il primo</button></div>`}
+    </div>`;
+
+  const obiettiviHtml = `
+    <div class="card dash-card">
+      <div class="dash-card-head"><div class="dash-card-title">Obiettivi <span class="count">${db.obiettivi.length}</span></div>${dashLink('Tutti','obiettivi')}</div>
+      ${db.obiettivi.length ? `<div class="mini-list">${db.obiettivi.slice(0,4).map(o=>{
+        const pct = Math.min(100, (o.current/o.target*100)||0);
+        return `<div class="mini-row" style="display:block; cursor:pointer;" onclick="modalContributoObiettivo('${o.id}')">
+          <div style="display:flex; justify-content:space-between; gap:10px;">
+            <span class="mini-title">${esc(o.name)}</span>
+            <span class="mini-amount" style="font-size:12.5px;">${euro(o.current)} <span style="color:var(--text-faint); font-weight:500;">/ ${euro(o.target)}</span></span>
+          </div>
+          <div class="mini-bar" style="height:6px;"><div style="width:${pct}%; background:${o.color};"></div></div>
+        </div>`;}).join('')}</div>`
+      : `<div class="empty-mini">Nessun obiettivo. <button onclick="modalObiettivo()">Creane uno</button></div>`}
+    </div>`;
+
+  const movimentiHtml = `
+    <div class="card dash-card">
+      <div class="dash-card-head"><div class="dash-card-title">Ultimi movimenti</div>${dashLink('Tutti','spese')}</div>
+      ${recenti.length ? `<div class="mini-list">${recenti.map(m=>{
+        const tr = m.type==='trasferimento', us = m.type==='uscita';
+        const acc = !tr ? db.accounts.find(a=>a.id===m.accountId) : null;
+        const cat = !tr && m.category ? catInfo(m.category) : null;
+        return `<div class="mini-row">
+          <div class="mini-dot" style="background:${tr?'var(--blue-dim)':us?'rgba(255,55,95,0.14)':'var(--mint-dim)'}; color:${tr?'var(--blue)':us?'#FF375F':'var(--mint)'};">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2">${tr?'<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>':us?'<path d="M12 5v14M19 12l-7 7-7-7"/>':'<path d="M12 19V5M5 12l7-7 7 7"/>'}</svg>
+          </div>
+          <div class="mini-main"><div class="mini-title">${esc(m.name)}</div><div class="mini-sub">${fmtDate(m.date)}${acc?' · '+esc(acc.name):''}${cat?' · '+esc(cat.label):''}</div></div>
+          <div class="mini-amount" style="color:${tr?'var(--blue)':us?'var(--coral)':'var(--mint)'}">${tr?'':us?'−':'+'} ${euro(m.amount)}</div>
+        </div>`;}).join('')}</div>`
+      : `<div class="empty-mini">Nessun movimento. <button onclick="modalMovimento(null,'uscita')">Registra il primo</button></div>`}
+    </div>`;
+
+  const ricorrentiHtml = `
+    <div class="card dash-card">
+      <div class="dash-card-head"><div class="dash-card-title">Ricorrenti e acquisti</div></div>
+      <div class="mini-list">
+        <div class="mini-row clickable" onclick="goToPage('fisse')">
+          <div class="mini-dot" style="background:var(--amber-dim); color:var(--amber);">↻</div>
+          <div class="mini-main"><div class="mini-title">Spese fisse</div><div class="mini-sub">${plur(db.fisse.length,"voce ricorrente","voci ricorrenti")}</div></div>
+          <div class="mini-amount" style="color:var(--amber)">${euro(fisseMese)}<span style="color:var(--text-faint); font-weight:500; font-size:11px;">/mese</span></div>
+        </div>
+        <div class="mini-row clickable" onclick="goToPage('acquisti')">
+          <div class="mini-dot" style="background:rgba(79,209,232,0.14); color:#4FD1E8;">🛒</div>
+          <div class="mini-main"><div class="mini-title">Lista acquisti</div><div class="mini-sub">${acquistiPending.length} da comprare</div></div>
+          <div class="mini-amount">${euro(acquistiPending.reduce((s,a)=>s+Number(a.price||0)*Number(a.qty||1),0))}</div>
+        </div>
+      </div>
+    </div>`;
+
+  return { hero, mese, eventiHtml, taskHtml, contiHtml, obiettiviHtml, movimentiHtml, ricorrentiHtml, snaps:getSnapshots() };
+}
+
+function aggiungiTaskDashboard(){
+  const input = document.getElementById('dash-task-input');
+  const text = input ? input.value.trim() : '';
+  if(!text) return;
+  db.tasks.push({ id:uid(), text, note:'', priority:'', dueDate:'', done:false, subtasks:[], prevId:null, prevNome:'' });
+  saveDB(); renderAll(); toast('Task aggiunta.');
+  document.getElementById('dash-task-input')?.focus();
+}
+
+function renderDashboard(){
+  const B = dashBlocks();
   const dashboardIsActivePage = document.getElementById('page-dashboard').classList.contains('active');
-
-  if(isMobileView() && !dashboardIsActivePage){
-    // non siamo sulla Dashboard: nessun contenuto da mostrare qui (il CSS lo tiene comunque nascosto)
-    document.getElementById('mobile-dash-root').innerHTML = '';
-    return;
-  }
+  const nome = session ? session.name : '';
+  const oggiLungo = (d=>d.charAt(0).toUpperCase()+d.slice(1))(new Date().toLocaleDateString('it-IT',{ weekday:'long', day:'numeric', month:'long' }));
 
   if(isMobileView()){
     document.getElementById('page-dashboard').innerHTML = '';
     const rootEl = document.getElementById('mobile-dash-root');
-
-    const meseCorrente = meseKeyFromDate(new Date());
-    const usciteMese = db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).reduce((s,m)=>s+Number(m.amount),0);
-    const speseCategoria = {};
-    db.movimenti.filter(m=>m.type==='uscita' && (m.date||'').slice(0,7)===meseCorrente).forEach(m=>{
-      const key = m.category || 'altro';
-      speseCategoria[key] = (speseCategoria[key]||0) + Number(m.amount);
-    });
-    const categorieTop = CATEGORIE.filter(c=>speseCategoria[c.key]).sort((a,b)=>speseCategoria[b.key]-speseCategoria[a.key]).slice(0,4);
-    const movimentiRecenti = db.movimenti.map((m,i)=>({m,i})).sort((a,b)=>{
-      const cmp = (b.m.date||'').localeCompare(a.m.date||'');
-      return cmp!==0 ? cmp : b.i-a.i;
-    }).slice(0,6).map(x=>x.m);
-
+    if(!dashboardIsActivePage){ rootEl.innerHTML = ''; return; }
+    const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
+    const trend = dashTrend();
     rootEl.innerHTML = `
       <div class="mobile-dash-hero">
-        <div class="hero-balance-label">Saldo totale</div>
+        <div class="hero-balance-label">Ciao ${esc(nome)} · saldo sui conti</div>
         <div class="hero-balance-amount">${euro(totalConti)}</div>
-        ${trendPct!==null ? `<div class="hero-balance-trend ${trendAbs>=0?'up':'down'}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
-          ${trendAbs>=0?'+':''}${trendPct.toFixed(1)}% negli ultimi 30gg
+        ${trend ? `<div class="hero-balance-trend ${trend.abs>=0?'up':'down'}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trend.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
+          ${trend.abs>=0?'+':'−'}${euro(Math.abs(trend.abs))} in 30 giorni
         </div>` : ''}
         <div class="hero-balance-actions">
           <button class="hero-balance-btn primary" onclick="modalMovimento(null,'uscita')">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
-            Spesa
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>Spesa
           </button>
           <button class="hero-balance-btn" onclick="modalMovimento(null,'entrata')">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-            Entrata
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Entrata
           </button>
         </div>
         <div class="hero-stats-row">
-          <div class="hero-stat">
-            <div class="hero-stat-label">Preventivato</div>
-            <div class="hero-stat-value" style="color:var(--blue);">${euro(totalPrev)}</div>
-          </div>
-          <div class="hero-stat">
-            <div class="hero-stat-label">Mancante</div>
-            <div class="hero-stat-value" style="color:#FF8A7E;">${euro(totalMancanti)}</div>
-          </div>
-          <div class="hero-stat">
-            <div class="hero-stat-label">Totale</div>
-            <div class="hero-stat-value">${euro(totaleGenerale)}</div>
-          </div>
+          <div class="hero-stat" onclick="goToPage('preventivati')"><div class="hero-stat-label">Da incassare</div><div class="hero-stat-value" style="color:var(--blue);">${euro(totalPrev)}</div></div>
+          <div class="hero-stat" onclick="goToPage('mancanti')"><div class="hero-stat-label">Mancanti</div><div class="hero-stat-value" style="color:#ff8fa8;">${euro(totalMancanti)}</div></div>
+          <div class="hero-stat"><div class="hero-stat-label">Totale</div><div class="hero-stat-value">${euro(totaleGenerale)}</div></div>
         </div>
       </div>
-
       <div class="mobile-dash-sheet">
-        ${trendPct!==null ? `
-        <div class="trend-banner ${trendAbs>=0?'up':'down'}">
-          <span class="trend-banner-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg></span>
-          <span class="trend-banner-label">Andamento ultimi 30 giorni</span>
-          <span class="trend-banner-amount">${trendAbs>=0?'+':'−'} ${euro(Math.abs(trendAbs))}</span>
-          <span class="trend-banner-pct">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
-            ${trendAbs>=0?'+':'−'}${Math.abs(trendPct).toFixed(1)}%
-          </span>
-          <span class="trend-banner-sub">Da ${euro(trendRef)} a ${euro(totalConti)} sul totale conti</span>
+        <div class="quick-actions mobile-quick">
+          ${ADD_ACTIONS.slice(2,10).map(a=>`<button class="qa-btn" onclick="${a.fn}"><span class="qa-icon" style="background:${a.bg}; color:${a.color};">+</span>${a.label}</button>`).join('')}
         </div>
-        ` : `
-        <div class="trend-banner flat">
-          <span class="trend-banner-label">Andamento ultimi 30 giorni</span>
-          <span class="trend-banner-sub">Servono almeno due rilevazioni per calcolare la variazione: torna a trovarci tra qualche giorno.</span>
-        </div>
-        `}
-
-        <div class="spend-summary">
-          <div class="spend-summary-text">
-            <div class="spend-summary-label">Spesa questo mese</div>
-            <div class="spend-summary-amount">${euro(usciteMese)}</div>
-          </div>
-          <div class="spend-summary-icons">
-            ${categorieTop.length ? categorieTop.map(c=>`<div class="spend-summary-icon" style="background:${c.color};" title="${esc(c.label)}: ${euro(speseCategoria[c.key])}">${esc(c.label.charAt(0))}</div>`).join('') : `<div class="spend-summary-icon" style="background:var(--surface-2); color:var(--text-faint);">—</div>`}
-          </div>
-        </div>
-
-        <div class="grid grid-4" style="margin-bottom:20px;">
-          <div class="card" style="cursor:pointer;" onclick="goToPage('task')">
-            <div class="card-title">Task</div>
-            <div class="stat-value" style="font-size:17px;">${taskPending.length}</div>
-            <div class="row-sub" style="margin-top:4px;">${taskPending.length ? 'da fare' : 'Tutto completato'}</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Spese fisse mensili</div>
-            <div class="stat-value" style="color:var(--amber); font-size:17px;">${euro(totalFisseMensili)}</div>
-            <div class="row-sub" style="margin-top:4px;">${db.fisse.length} voci</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Obiettivi attivi</div>
-            <div class="stat-value" style="font-size:17px;">${db.obiettivi.length}</div>
-            <div class="row-sub" style="margin-top:4px;">${obiettiviTop.length? Math.round((obiettiviTop.reduce((s,o)=>s+(o.target?o.current/o.target:0),0)/obiettiviTop.length)*100)+'% medio' : 'nessuno'}</div>
-          </div>
-          <div class="card">
-            <div class="card-title">Lista acquisti</div>
-            <div class="stat-value" style="font-size:17px;">${euro(acquistiPendingTotal)}</div>
-            <div class="row-sub" style="margin-top:4px;">${acquistiPending.length} da comprare</div>
-          </div>
-        </div>
-
-        <div class="section-title">Transazioni recenti <span class="count">${movimentiRecenti.length}</span></div>
-        <div class="list">
-          ${movimentiRecenti.length ? movimentiRecenti.map(m=>{
-            const isTrasf = m.type==='trasferimento';
-            const isUscita = m.type==='uscita';
-            const acc = !isTrasf ? db.accounts.find(a=>a.id===m.accountId) : null;
-            const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,107,94,0.14)':'var(--mint-dim)');
-            const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF6B5E':'var(--mint)');
-            const iconPath = isTrasf ? '<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>' : (isUscita ? '<path d="M12 5v14M19 12l-7 7-7-7"/>' : '<path d="M12 19V5M5 12l7-7 7 7"/>');
-            return `<div class="row-item">
-              <div class="row-icon" style="background:${iconBg}; color:${iconColor};">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${iconPath}</svg>
-              </div>
-              <div class="row-main"><div class="row-title">${esc(m.name)}</div><div class="row-sub">${acc?esc(acc.name):fmtDate(m.date)}</div></div>
-              <div class="row-amount" style="color:${isTrasf?'var(--blue)':(isUscita?'var(--coral)':'var(--mint)')}">${isTrasf?'':(isUscita?'−':'+')} ${euro(m.amount)}</div>
-            </div>`;
-          }).join('') : emptyState("Nessun movimento ancora. Registra una spesa o un'entrata per iniziare.")}
-        </div>
-
-        <div class="grid grid-2" style="margin-top:20px;">
-          <div class="card">
-            <div class="card-title">Andamento denaro attuale</div>
-            <div style="height:200px; margin-top:10px;"><canvas id="chart-trend"></canvas></div>
-          </div>
-          <div class="card">
-            <div class="card-title">Ripartizione conti</div>
-            <div style="height:200px; margin-top:10px;"><canvas id="chart-breakdown"></canvas></div>
-          </div>
-        </div>
-
-        <div class="section-title" style="margin-top:24px;">Azioni rapide</div>
-        ${quickActionsHtml}
-
-        <div class="section-title">Obiettivi in evidenza <span class="count">${db.obiettivi.length}</span></div>
-        <div class="grid grid-2">
-          ${obiettiviCardsHtml}
+        <div class="dash-grid">
+          ${B.eventiHtml}
+          ${B.taskHtml}
+          ${B.mese}
+          ${B.movimentiHtml}
+          ${B.contiHtml}
+          ${B.obiettiviHtml}
+          ${B.ricorrentiHtml}
         </div>
       </div>
     `;
-    drawTrendChart(snaps);
-    drawBreakdownChart();
     return;
   }
 
   document.getElementById('mobile-dash-root').innerHTML = '';
   document.getElementById('page-dashboard').innerHTML = `
-    <div class="topbar">
+    <div class="dash-head">
       <div>
-        <div class="page-title">Dashboard</div>
-        <div class="page-sub">Panoramica generale del tuo denaro, ${esc(session.name)}.</div>
+        <div class="page-title">Ciao ${esc(nome)}</div>
+        <div class="page-sub">${oggiLungo}</div>
       </div>
-    </div>
-
-    ${trendPct!==null ? `
-    <div class="trend-banner ${trendAbs>=0?'up':'down'}">
-      <span class="trend-banner-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg></span>
-      <span class="trend-banner-label">Andamento ultimi 30 giorni</span>
-      <span class="trend-banner-amount">${trendAbs>=0?'+':'−'} ${euro(Math.abs(trendAbs))}</span>
-      <span class="trend-banner-pct">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trendAbs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
-        ${trendAbs>=0?'+':'−'}${Math.abs(trendPct).toFixed(1)}%
-      </span>
-      <span class="trend-banner-sub">Da ${euro(trendRef)} a ${euro(totalConti)} sul totale conti</span>
-    </div>
-    ` : `
-    <div class="trend-banner flat">
-      <span class="trend-banner-label">Andamento ultimi 30 giorni</span>
-      <span class="trend-banner-sub">Servono almeno due rilevazioni per calcolare la variazione: torna a trovarci tra qualche giorno.</span>
-    </div>
-    `}
-
-    ${quickActionsHtml}
-
-    <div class="grid grid-4" style="margin-top:20px;">
-      <div class="card" style="cursor:pointer;" onclick="goToPage('task')">
-        <div class="card-title">Task</div>
-        <div class="stat-value" style="font-size:20px;">${taskPending.length}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">${taskPending.length ? 'da fare' : 'Tutto completato'}</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Spese fisse mensili</div>
-        <div class="stat-value" style="color:var(--amber); font-size:20px;">${euro(totalFisseMensili)}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">${db.fisse.length} voci ricorrenti</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Obiettivi attivi</div>
-        <div class="stat-value" style="font-size:20px;">${db.obiettivi.length}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">${obiettiviTop.length? Math.round((obiettiviTop.reduce((s,o)=>s+(o.target?o.current/o.target:0),0)/obiettiviTop.length)*100)+'% medio raggiunto' : 'Nessun obiettivo ancora'}</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Lista acquisti</div>
-        <div class="stat-value" style="font-size:20px;">${euro(acquistiPendingTotal)}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">${acquistiPending.length} da comprare</div>
-      </div>
-    </div>
-
-    <div class="grid grid-2" style="margin-top:20px;">
-      <div class="card">
-        <div class="card-title">Andamento denaro attuale</div>
-        <div style="height:220px; margin-top:10px;"><canvas id="chart-trend"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="card-title">Ripartizione conti</div>
-        <div style="height:220px; margin-top:10px;"><canvas id="chart-breakdown"></canvas></div>
-      </div>
-    </div>
-
-    <div class="section-title">Prossime scadenze <span class="count">${upcoming.length}</span></div>
-    ${vistaToggle('dashboard')}
-    ${calendarState.dashboard.on ? renderCalendarGrid('dashboard') : `
-    <div class="list">
-      ${upcoming.length ? upcoming.map(p=>{
-        const d = daysUntil(p.date);
-        const urgent = d<=5;
-        const ts = prevTaskStats(p.id);
-        return `<div class="row-item" style="cursor:pointer;" onclick="openPrevDrawer('${p.id}')">
-          <div class="row-icon" style="background:${p.color}1f; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
-          <div class="row-main">
-            <div class="row-title">${esc(p.name)}</div>
-            <div class="row-sub">${fmtDate(p.date)} · ${d===0?'oggi':d===1?'domani':d<0?'scaduto':'tra '+d+' giorni'}${ts.n?` · ${ts.fatte}/${ts.n} task`:''}</div>
+      <div class="dash-head-actions">
+        <button class="btn" onclick="modalMovimento(null,'entrata')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Entrata</button>
+        <button class="btn btn-primary" onclick="modalMovimento(null,'uscita')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>Spesa</button>
+        <div class="add-menu" id="add-menu">
+          <button class="btn" onclick="toggleAddMenu(event)">+ Aggiungi
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>
+          <div class="add-menu-pop" onclick="event.stopPropagation()">
+            ${ADD_ACTIONS.slice(2).map(a=>`<button onclick="document.getElementById('add-menu').classList.remove('open'); ${a.fn}"><span class="qa-icon" style="background:${a.bg}; color:${a.color};">+</span>${a.label}</button>`).join('')}
           </div>
-          ${urgent ? `<span class="pill" style="background:var(--amber-dim); color:var(--amber);">a breve</span>` : ''}
-          <div class="row-amount">${euro(p.amount)}</div>
-        </div>`;
-      }).join('') : emptyState('Nessuna scadenza imminente.')}
+        </div>
+      </div>
     </div>
-    `}
 
-    <div class="section-title">Obiettivi in evidenza <span class="count">${db.obiettivi.length}</span></div>
-    <div class="grid grid-3">
-      ${obiettiviCardsHtml}
+    <div class="dash-grid">
+      <div class="span-8">${B.hero(true)}</div>
+      <div class="span-4">${B.contiHtml}</div>
+
+      <div class="span-4">${B.eventiHtml}</div>
+      <div class="span-4">${B.taskHtml}</div>
+      <div class="span-4">${B.mese}</div>
+
+      <div class="span-7">${B.movimentiHtml}</div>
+      <div class="span-5" style="display:flex; flex-direction:column; gap:16px;">${B.obiettiviHtml}${B.ricorrentiHtml}</div>
     </div>
   `;
-
-  drawTrendChart(snaps);
-  drawBreakdownChart();
+  drawTrendChart(B.snaps);
 }
 
 function drawTrendChart(snaps){
@@ -865,7 +881,7 @@ function drawTrendChart(snaps){
       labels: data.map(s=>fmtDate(s.date)),
       datasets:[{
         data: data.map(s=>s.total),
-        borderColor:'#34D27B', backgroundColor:'rgba(52,210,123,0.12)',
+        borderColor:'#30D158', backgroundColor:'rgba(48,209,88,0.14)',
         fill:true, tension:0.4, pointRadius:0, borderWidth:2.5,
       }]
     },
@@ -887,7 +903,7 @@ function drawBreakdownChart(){
     type:'doughnut',
     data:{
       labels: db.accounts.map(a=>a.name),
-      datasets:[{ data: db.accounts.map(a=>Number(a.balance)), backgroundColor: db.accounts.map(a=>a.color), borderWidth:3, borderColor:'#111112', borderRadius:6 }]
+      datasets:[{ data: db.accounts.map(a=>Number(a.balance)), backgroundColor: db.accounts.map(a=>a.color), borderWidth:3, borderColor:'#0b1510', borderRadius:6 }]
     },
     options:{
       responsive:true, maintainAspectRatio:false, cutout:'70%',
@@ -1100,8 +1116,8 @@ function renderSpese(){
         const fromAcc = isTrasf ? db.accounts.find(a=>a.id===m.fromAccountId) : null;
         const toAcc = isTrasf ? db.accounts.find(a=>a.id===m.toAccountId) : null;
         const cat = (!isTrasf && m.category) ? catInfo(m.category) : null;
-        const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,107,94,0.14)':'var(--mint-dim)');
-        const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF6B5E':'var(--mint)');
+        const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,55,95,0.14)':'var(--mint-dim)');
+        const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF375F':'var(--mint)');
         const iconPath = isTrasf ? '<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>' : (isUscita ? '<path d="M12 5v14M19 12l-7 7-7-7"/>' : '<path d="M12 19V5M5 12l7-7 7 7"/>');
         const sub = isTrasf ? `${fromAcc?esc(fromAcc.name):'conto eliminato'} → ${toAcc?esc(toAcc.name):'conto eliminato'} · ${fmtDate(m.date)}` : `${acc?esc(acc.name):'Conto eliminato'} · ${fmtDate(m.date)}${cat?' · '+esc(cat.label):''}`;
         return `
@@ -1134,7 +1150,7 @@ function drawCategorieChart(speseCategoria){
     type:'doughnut',
     data:{
       labels: entries.map(c=>c.label),
-      datasets:[{ data: entries.map(c=>speseCategoria[c.key]), backgroundColor: entries.map(c=>c.color), borderWidth:3, borderColor:'#111112', borderRadius:6 }]
+      datasets:[{ data: entries.map(c=>speseCategoria[c.key]), backgroundColor: entries.map(c=>c.color), borderWidth:3, borderColor:'#0b1510', borderRadius:6 }]
     },
     options:{
       responsive:true, maintainAspectRatio:false, cutout:'70%',
@@ -1143,12 +1159,12 @@ function drawCategorieChart(speseCategoria){
     }
   });
 }
-function modalMovimento(id){
+function modalMovimento(id, tipoIniziale){
   if(!db.accounts.length) return toast('Crea prima almeno un conto.');
   const isEdit = !!id;
   const m = isEdit ? db.movimenti.find(x=>x.id===id) : null;
   if(m && m.rettifica) return toast('Le rettifiche di saldo non sono modificabili: cambia di nuovo il saldo dal conto se serve.');
-  const tipo = m ? m.type : 'uscita';
+  const tipo = m ? m.type : (tipoIniziale || 'uscita');
   const accOptions = (selected)=> db.accounts.map(a=>`<option value="${a.id}" ${selected===a.id?'selected':''}>${esc(a.name)}</option>`).join('');
   const catOptions = (selected)=> CATEGORIE.map(c=>`<option value="${c.key}" ${(selected||'altro')===c.key?'selected':''}>${esc(c.label)}</option>`).join('');
   openModal(`
@@ -1307,7 +1323,7 @@ function checkStipendioAutomatico(){
     if(!giaRicevutoCorrente && !giaTracciatoCorrente){
       const stima = stipendioPerMese(st, meseCorrente);
       if(stima>0){
-        db.preventivati.push({ id:uid(), name:`${st.nome} ${fmtMese(meseCorrente)}`, amount:stima, date:ultimoGiornoMese(meseCorrente), note:'Stima automatica dalla sezione Stipendio', color:'#5CC8C2', fromStipendioId:st.id, fromStipendioMese:meseCorrente });
+        db.preventivati.push({ id:uid(), name:`${st.nome} ${fmtMese(meseCorrente)}`, amount:stima, date:ultimoGiornoMese(meseCorrente), note:'Stima automatica dalla sezione Stipendio', color:'#0A84FF', fromStipendioId:st.id, fromStipendioMese:meseCorrente });
         changed = true;
       }
     }
@@ -2858,7 +2874,7 @@ function renderSimulatore(){
       <div class="list">
         ${simState.movimenti.length ? [...simState.movimenti].reverse().map(m=>`
           <div class="row-item">
-            <div class="row-icon" style="background:${m.tipo==='entrata'?'var(--mint-dim)':'rgba(255,107,94,0.14)'}; color:${m.tipo==='entrata'?'var(--mint)':'#FF6B5E'};">
+            <div class="row-icon" style="background:${m.tipo==='entrata'?'var(--mint-dim)':'rgba(255,55,95,0.14)'}; color:${m.tipo==='entrata'?'var(--mint)':'#FF375F'};">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${m.tipo==='entrata'?'<path d="M12 19V5M5 12l7-7 7 7"/>':'<path d="M12 5v14M19 12l-7 7-7-7"/>'}</svg>
             </div>
             <div class="row-main"><div class="row-title">${esc(m.nome)}</div></div>
