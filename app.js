@@ -5,16 +5,16 @@
    - db.*           -> collections Firestore per utente
 ================================================================ */
 
-const ICON_COLORS = ['#30D158','#0A84FF','#FF9F0A','#FF453A','#BF5AF2','#64D2FF'];
+const ICON_COLORS = ['#34D27B','#C6F86B','#5CC8C2','#F2B84B','#FF6B5E','#8FD9A8'];
 const CATEGORIE = [
-  { key:'casa', label:'Casa', color:'#0A84FF' },
-  { key:'cibo', label:'Cibo e spesa', color:'#FF9F0A' },
-  { key:'trasporti', label:'Trasporti', color:'#30D158' },
-  { key:'svago', label:'Svago', color:'#BF5AF2' },
-  { key:'salute', label:'Salute', color:'#FF453A' },
-  { key:'lavoro', label:'Lavoro', color:'#64D2FF' },
-  { key:'risparmio', label:'Risparmio', color:'#FFD60A' },
-  { key:'altro', label:'Altro', color:'#8E8E93' },
+  { key:'casa', label:'Casa', color:'#5CC8C2' },
+  { key:'cibo', label:'Cibo e spesa', color:'#F2B84B' },
+  { key:'trasporti', label:'Trasporti', color:'#34D27B' },
+  { key:'svago', label:'Svago', color:'#C6F86B' },
+  { key:'salute', label:'Salute', color:'#FF6B5E' },
+  { key:'lavoro', label:'Lavoro', color:'#2DD4BF' },
+  { key:'risparmio', label:'Risparmio', color:'#86EFAC' },
+  { key:'altro', label:'Altro', color:'#7C8F84' },
 ];
 function catInfo(key){ return CATEGORIE.find(c=>c.key===key) || CATEGORIE[CATEGORIE.length-1]; }
 const MEDAGLIE_SOGLIE = [25, 50, 75, 100];
@@ -244,6 +244,7 @@ async function startSession(name, userId){
   if(!db.oreSettimanali) db.oreSettimanali = 40;
   if(!db.risparmiatoRinunce) db.risparmiatoRinunce = 0;
   if(!db.tasks) db.tasks = [];
+  db.preventivati.forEach(p=>recalcPrev(p)); // tiene allineato il residuo delle voci
   snapshots = await fbLoadSnapshots(userId);
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').classList.add('active');
@@ -582,14 +583,14 @@ function renderDashboard(){
 
   const quickActionsHtml = `
     <div class="quick-actions">
-      <button class="qa-btn" onclick="modalMovimento()"><span class="qa-icon" style="background:rgba(255,55,95,0.14); color:#FF375F;">+</span>Spesa</button>
+      <button class="qa-btn" onclick="modalMovimento()"><span class="qa-icon" style="background:rgba(255,107,94,0.14); color:#FF6B5E;">+</span>Spesa</button>
       <button class="qa-btn" onclick="modalAccount()"><span class="qa-icon" style="background:var(--mint-dim); color:var(--mint);">+</span>Conto</button>
       <button class="qa-btn" onclick="modalPreventivato()"><span class="qa-icon" style="background:var(--blue-dim); color:var(--blue);">+</span>Evento</button>
       <button class="qa-btn" onclick="modalMancante()"><span class="qa-icon" style="background:var(--coral-dim); color:var(--coral);">+</span>Mancante</button>
       <button class="qa-btn" onclick="modalFissa()"><span class="qa-icon" style="background:var(--amber-dim); color:var(--amber);">+</span>Spesa fissa</button>
-      <button class="qa-btn" onclick="modalObiettivo()"><span class="qa-icon" style="background:rgba(178,124,255,0.14); color:#B27CFF;">+</span>Obiettivo</button>
-      <button class="qa-btn" onclick="modalAcquisto()"><span class="qa-icon" style="background:rgba(79,209,232,0.14); color:#4FD1E8;">+</span>Acquisto</button>
-      <button class="qa-btn" onclick="modalTask()"><span class="qa-icon" style="background:rgba(48,209,88,0.14); color:var(--mint);">+</span>Task</button>
+      <button class="qa-btn" onclick="modalObiettivo()"><span class="qa-icon" style="background:rgba(198,248,107,0.14); color:#C6F86B;">+</span>Obiettivo</button>
+      <button class="qa-btn" onclick="modalAcquisto()"><span class="qa-icon" style="background:rgba(92,200,194,0.14); color:#5CC8C2;">+</span>Acquisto</button>
+      <button class="qa-btn" onclick="modalTask()"><span class="qa-icon" style="background:rgba(52,210,123,0.14); color:var(--mint);">+</span>Task</button>
     </div>
   `;
   const obiettiviCardsHtml = obiettiviTop.length ? obiettiviTop.map(o=>{
@@ -652,7 +653,7 @@ function renderDashboard(){
           </div>
           <div class="hero-stat">
             <div class="hero-stat-label">Mancante</div>
-            <div class="hero-stat-value" style="color:#ff8fa8;">${euro(totalMancanti)}</div>
+            <div class="hero-stat-value" style="color:#FF8A7E;">${euro(totalMancanti)}</div>
           </div>
           <div class="hero-stat">
             <div class="hero-stat-label">Totale</div>
@@ -719,8 +720,8 @@ function renderDashboard(){
             const isTrasf = m.type==='trasferimento';
             const isUscita = m.type==='uscita';
             const acc = !isTrasf ? db.accounts.find(a=>a.id===m.accountId) : null;
-            const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,55,95,0.14)':'var(--mint-dim)');
-            const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF375F':'var(--mint)');
+            const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,107,94,0.14)':'var(--mint-dim)');
+            const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF6B5E':'var(--mint)');
             const iconPath = isTrasf ? '<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>' : (isUscita ? '<path d="M12 5v14M19 12l-7 7-7-7"/>' : '<path d="M12 19V5M5 12l7-7 7 7"/>');
             return `<div class="row-item">
               <div class="row-icon" style="background:${iconBg}; color:${iconColor};">
@@ -861,7 +862,7 @@ function drawTrendChart(snaps){
       labels: data.map(s=>fmtDate(s.date)),
       datasets:[{
         data: data.map(s=>s.total),
-        borderColor:'#30D158', backgroundColor:'rgba(48,209,88,0.14)',
+        borderColor:'#34D27B', backgroundColor:'rgba(52,210,123,0.12)',
         fill:true, tension:0.4, pointRadius:0, borderWidth:2.5,
       }]
     },
@@ -869,8 +870,8 @@ function drawTrendChart(snaps){
       responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c=> euro(c.raw) } } },
       scales:{
-        x:{ grid:{display:false}, ticks:{ color:'#5D7169', font:{size:10} } },
-        y:{ grid:{color:'rgba(20,40,30,0.07)'}, ticks:{ color:'#5D7169', font:{size:10}, callback:v=>'€'+v } }
+        x:{ grid:{display:false}, ticks:{ color:'#62786C', font:{size:10} } },
+        y:{ grid:{color:'rgba(255,255,255,0.05)'}, ticks:{ color:'#5D7169', font:{size:10}, callback:v=>'€'+v } }
       }
     }
   });
@@ -883,11 +884,11 @@ function drawBreakdownChart(){
     type:'doughnut',
     data:{
       labels: db.accounts.map(a=>a.name),
-      datasets:[{ data: db.accounts.map(a=>Number(a.balance)), backgroundColor: db.accounts.map(a=>a.color), borderWidth:3, borderColor:'#f6f9f7', borderRadius:6 }]
+      datasets:[{ data: db.accounts.map(a=>Number(a.balance)), backgroundColor: db.accounts.map(a=>a.color), borderWidth:3, borderColor:'#0f1a14', borderRadius:6 }]
     },
     options:{
       responsive:true, maintainAspectRatio:false, cutout:'70%',
-      plugins:{ legend:{ position:'bottom', labels:{ color:'#5C6F65', font:{size:11}, padding:12, boxWidth:8 } },
+      plugins:{ legend:{ position:'bottom', labels:{ color:'#9DB3A7', font:{size:11}, padding:12, boxWidth:8 } },
         tooltip:{ callbacks:{ label: c=> `${c.label}: ${euro(c.raw)}` } } }
     }
   });
@@ -1096,8 +1097,8 @@ function renderSpese(){
         const fromAcc = isTrasf ? db.accounts.find(a=>a.id===m.fromAccountId) : null;
         const toAcc = isTrasf ? db.accounts.find(a=>a.id===m.toAccountId) : null;
         const cat = (!isTrasf && m.category) ? catInfo(m.category) : null;
-        const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,55,95,0.14)':'var(--mint-dim)');
-        const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF375F':'var(--mint)');
+        const iconBg = isTrasf ? 'var(--blue-dim)' : (isUscita?'rgba(255,107,94,0.14)':'var(--mint-dim)');
+        const iconColor = isTrasf ? 'var(--blue)' : (isUscita?'#FF6B5E':'var(--mint)');
         const iconPath = isTrasf ? '<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>' : (isUscita ? '<path d="M12 5v14M19 12l-7 7-7-7"/>' : '<path d="M12 19V5M5 12l7-7 7 7"/>');
         const sub = isTrasf ? `${fromAcc?esc(fromAcc.name):'conto eliminato'} → ${toAcc?esc(toAcc.name):'conto eliminato'} · ${fmtDate(m.date)}` : `${acc?esc(acc.name):'Conto eliminato'} · ${fmtDate(m.date)}${cat?' · '+esc(cat.label):''}`;
         return `
@@ -1130,11 +1131,11 @@ function drawCategorieChart(speseCategoria){
     type:'doughnut',
     data:{
       labels: entries.map(c=>c.label),
-      datasets:[{ data: entries.map(c=>speseCategoria[c.key]), backgroundColor: entries.map(c=>c.color), borderWidth:3, borderColor:'#f6f9f7', borderRadius:6 }]
+      datasets:[{ data: entries.map(c=>speseCategoria[c.key]), backgroundColor: entries.map(c=>c.color), borderWidth:3, borderColor:'#0f1a14', borderRadius:6 }]
     },
     options:{
       responsive:true, maintainAspectRatio:false, cutout:'70%',
-      plugins:{ legend:{ position:'bottom', labels:{ color:'#5C6F65', font:{size:11}, padding:12, boxWidth:8 } },
+      plugins:{ legend:{ position:'bottom', labels:{ color:'#9DB3A7', font:{size:11}, padding:12, boxWidth:8 } },
         tooltip:{ callbacks:{ label: c=> `${c.label}: ${euro(c.raw)}` } } }
     }
   });
@@ -1303,7 +1304,7 @@ function checkStipendioAutomatico(){
     if(!giaRicevutoCorrente && !giaTracciatoCorrente){
       const stima = stipendioPerMese(st, meseCorrente);
       if(stima>0){
-        db.preventivati.push({ id:uid(), name:`${st.nome} ${fmtMese(meseCorrente)}`, amount:stima, date:ultimoGiornoMese(meseCorrente), note:'Stima automatica dalla sezione Stipendio', color:'#0A84FF', fromStipendioId:st.id, fromStipendioMese:meseCorrente });
+        db.preventivati.push({ id:uid(), name:`${st.nome} ${fmtMese(meseCorrente)}`, amount:stima, date:ultimoGiornoMese(meseCorrente), note:'Stima automatica dalla sezione Stipendio', color:'#5CC8C2', fromStipendioId:st.id, fromStipendioMese:meseCorrente });
         changed = true;
       }
     }
@@ -1325,6 +1326,8 @@ function checkPreventivatiScaduti(){
         mancante.fromStipendioId = p.fromStipendioId;
         mancante.fromStipendioMese = p.fromStipendioMese;
         mancante.note = "Stima, da confermare all'accredito";
+      } else if(Array.isArray(p.voci) && p.voci.some(v=>!v.done)){
+        mancante.note = 'Voci da incassare: ' + p.voci.filter(v=>!v.done).map(v=>v.name).join(', ');
       } else if(p.note){
         mancante.note = p.note;
       }
@@ -1548,52 +1551,112 @@ function deleteEccezione(stipendioId, id){
   saveDB(); renderAll(); toast('Eliminata.');
 }
 
-/* ==================== PREVENTIVATI ==================== */
+/* ==================== PREVENTIVATI (con voci espandibili) ====================
+   Un preventivato può avere più voci (es. "Acconto", "Saldo", "Extra album").
+   Ogni voce si segna come incassata singolarmente scegliendo il conto: il saldo
+   del conto sale, viene registrata un'entrata e l'importo del preventivato
+   (p.amount) diventa il RESIDUO ancora da incassare. Quando tutte le voci sono
+   incassate il preventivato si chiude da solo.
+============================================================================= */
+let prevExpanded = new Set(); // stato di sessione: quali preventivati hanno il pannello voci aperto
+let prevDraft = [];           // voci in modifica dentro il modal
+
+function prevHasVoci(p){ return Array.isArray(p.voci) && p.voci.length>0; }
+function prevStats(p){
+  if(!prevHasVoci(p)) return { totale:Number(p.amount)||0, incassato:0, residuo:Number(p.amount)||0, n:0, fatte:0, pct:0 };
+  const totale = p.voci.reduce((s,v)=>s+Number(v.amount||0),0);
+  const incassato = p.voci.filter(v=>v.done).reduce((s,v)=>s+Number(v.amount||0),0);
+  const fatte = p.voci.filter(v=>v.done).length;
+  return { totale, incassato, residuo: totale-incassato, n:p.voci.length, fatte, pct: totale ? Math.round(incassato/totale*100) : Math.round(fatte/p.voci.length*100) };
+}
+function recalcPrev(p){ if(prevHasVoci(p)) p.amount = prevStats(p).residuo; }
+function togglePrevExpand(id){
+  if(prevExpanded.has(id)) prevExpanded.delete(id); else prevExpanded.add(id);
+  renderPreventivati();
+}
+
 function renderPreventivati(){
   const f = filters.preventivati;
   const total = db.preventivati.reduce((s,p)=>s+Number(p.amount),0);
   let sorted = [...db.preventivati].sort((a,b)=> new Date(a.date||'2100-01-01') - new Date(b.date||'2100-01-01'));
-  if(f.q) sorted = sorted.filter(p=> matches(p.name,f.q) || matches(p.note,f.q));
+  if(f.q) sorted = sorted.filter(p=> matches(p.name,f.q) || matches(p.note,f.q) || (p.voci||[]).some(v=>matches(v.name,f.q)));
   document.getElementById('page-preventivati').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Appuntamenti &amp; Preventivati</div><div class="page-sub">${db.preventivati.length} eventi · totale ${euro(total)}</div></div>
+      <div><div class="page-title">Appuntamenti &amp; Preventivati</div><div class="page-sub">${db.preventivati.length} eventi · ${euro(total)} ancora da incassare</div></div>
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalPreventivato()">+ Nuovo evento</button></div>
     </div>
     ${vistaToggle('preventivati')}
     ${calendarState.preventivati.on ? renderCalendarGrid('preventivati') : `
-    ${searchBar('preventivati','Cerca evento...')}
+    ${searchBar('preventivati','Cerca evento o voce...')}
     <div class="list">
-      ${sorted.length ? sorted.map(p=>{
-        const d = p.date ? daysUntil(p.date) : null;
-        const urgente = d!==null && d>=0 && d<=3;
-        return `<div class="row-item">
-          <div class="row-icon" style="background:${p.color}22; color:${p.color};">${p.name.charAt(0).toUpperCase()}</div>
-          <div class="row-main">
-            <div class="row-title">${esc(p.name)}</div>
-            <div class="row-sub">${fmtDate(p.date)}${d!==null ? ' · '+(d===0?'oggi':d<0?'passato':'tra '+d+' giorni') : ''}${p.note?' · '+esc(p.note):''}</div>
-          </div>
-          ${urgente ? `<span class="pill" style="background:var(--amber-dim); color:var(--amber);">a breve</span>` : ''}
-          <div class="row-amount" style="color:var(--blue)">${euro(p.amount)}</div>
-          <div class="row-actions">
-            <button class="icon-btn" onclick="modalPreventivato('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
-            <button class="icon-btn" style="color:var(--mint)" title="Segna come incassato" onclick="convertToAccount('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></button>
-            <button class="icon-btn btn-danger" onclick="deleteItem('preventivati','${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></button>
-          </div>
-        </div>`;
-      }).join('') : emptyState(db.preventivati.length ? 'Nessun evento corrisponde alla ricerca.' : 'Nessun evento preventivato. Aggiungine uno.')}
+      ${sorted.length ? sorted.map(p=>prevRowHtml(p)).join('') : emptyState(db.preventivati.length ? 'Nessun evento corrisponde alla ricerca.' : 'Nessun evento preventivato. Aggiungine uno e suddividilo in voci.')}
     </div>
     `}
   `;
 }
+function prevRowHtml(p){
+  const d = p.date ? daysUntil(p.date) : null;
+  const urgente = d!==null && d>=0 && d<=3;
+  const conVoci = prevHasVoci(p);
+  const st = prevStats(p);
+  const aperto = conVoci && prevExpanded.has(p.id);
+  const sub = `${fmtDate(p.date)}${d!==null ? ' · '+(d===0?'oggi':d<0?'passato':'tra '+d+' giorni') : ''}${conVoci ? ` · ${st.fatte}/${st.n} incassate` : ''}${p.note?' · '+esc(p.note):''}`;
+  return `<div class="row-item prev-row ${conVoci?'has-voci':''} ${aperto?'expanded':''}">
+    <div class="row-icon" style="background:${p.color}22; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
+    <div class="row-main" ${conVoci?`onclick="togglePrevExpand('${p.id}')"`:''}>
+      <div class="row-title">${esc(p.name)}${conVoci?`<span class="prev-voci-count">${st.n} voc${st.n===1?'e':'i'}</span>`:''}</div>
+      <div class="row-sub">${sub}</div>
+    </div>
+    ${urgente ? `<span class="pill" style="background:var(--amber-dim); color:var(--amber);">a breve</span>` : ''}
+    <div class="row-amount" style="color:var(--blue)" title="${conVoci?'Residuo da incassare':''}">${euro(p.amount)}</div>
+    <div class="row-actions">
+      ${conVoci ? `<button class="icon-btn prev-expand" title="${aperto?'Chiudi voci':'Mostra voci'}" onclick="togglePrevExpand('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>` : ''}
+      <button class="icon-btn" title="Modifica" onclick="modalPreventivato('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
+      <button class="icon-btn" style="color:var(--mint)" title="${conVoci?'Incassa tutto il residuo':'Segna come incassato'}" onclick="convertToAccount('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></button>
+      <button class="icon-btn btn-danger" title="Elimina" onclick="deleteItem('preventivati','${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></button>
+    </div>
+    ${aperto ? `
+    <div class="prev-panel">
+      <div class="prev-panel-head">
+        <div class="prev-panel-stats">Incassato <b>${euro(st.incassato)}</b> su <b>${euro(st.totale)}</b></div>
+        <div class="progress-track"><div class="progress-fill" style="width:${st.pct}%; background:linear-gradient(90deg, var(--mint), var(--lime));"></div></div>
+        <div class="prev-panel-stats"><b>${st.pct}%</b></div>
+      </div>
+      ${p.voci.map(v=>{
+        const acc = v.accountId ? db.accounts.find(a=>a.id===v.accountId) : null;
+        return `<div class="voce-row ${v.done?'done':''}">
+          <button class="voce-check ${v.done?'checked':''}" ${v.done?'disabled title="Già incassata"':`title="Segna come incassata" onclick="modalIncassaVoce('${p.id}','${v.id}')"`}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg></button>
+          <div class="voce-name"><span class="voce-label">${esc(v.name)}</span>${v.done ? `<small>Incassata ${fmtDate(v.doneDate)}${acc?' su '+esc(acc.name):''}</small>` : ''}</div>
+          <div class="voce-amount">${euro(v.amount)}</div>
+        </div>`;
+      }).join('')}
+      <div class="prev-panel-foot">
+        <button class="btn" onclick="modalPreventivato('${p.id}')">Modifica voci</button>
+        ${st.residuo>0 ? `<button class="btn btn-primary" onclick="convertToAccount('${p.id}')">Incassa residuo ${euro(st.residuo)}</button>` : ''}
+      </div>
+    </div>` : ''}
+  </div>`;
+}
+
 function modalPreventivato(id){
   const isEdit = !!id;
   const p = isEdit ? db.preventivati.find(x=>x.id===id) : null;
+  prevDraft = p && prevHasVoci(p) ? p.voci.map(v=>({...v})) : [];
+  const conVoci = prevDraft.length>0;
   openModal(`
     <h3>${isEdit?'Modifica evento':'Nuovo evento preventivato'}</h3>
-    <div class="field"><label>Nome evento / cliente</label><input id="f-name" value="${p?esc(p.name):''}" placeholder="Es. Compleanno Marco"></div>
+    <div class="field"><label>Nome evento / cliente</label><input id="f-name" value="${p?esc(p.name):''}" placeholder="Es. Matrimonio Rossi"></div>
     <div class="field-row">
-      <div class="field"><label>Importo (€)</label><input id="f-amount" type="number" step="0.01" value="${p?p.amount:''}" placeholder="0.00"></div>
+      <div class="field"><label>Importo (€)</label><input id="f-amount" type="number" step="0.01" value="${p ? (conVoci ? prevStats({voci:prevDraft}).totale : p.amount) : ''}" placeholder="0.00" ${conVoci?'disabled':''}></div>
       <div class="field"><label>Data</label><input id="f-date" type="date" value="${p?p.date||'':''}"></div>
+    </div>
+    <div class="field">
+      <label>Voci del preventivo (opzionale)</label>
+      <div class="voci-editor">
+        <div id="voci-editor-rows"></div>
+        <button type="button" class="voci-editor-add" onclick="aggiungiVoceDraft()">+ Aggiungi voce</button>
+      </div>
+      <div class="voci-total" id="voci-total"></div>
     </div>
     <div class="field"><label>Nota (opzionale)</label><input id="f-note" value="${p?esc(p.note||''):''}" placeholder="Es. acconto già versato"></div>
     <div class="modal-actions">
@@ -1601,27 +1664,129 @@ function modalPreventivato(id){
       <button class="btn btn-primary" onclick="savePreventivato('${id||''}')">${isEdit?'Salva':'Crea'}</button>
     </div>
   `);
+  renderVociDraft();
+}
+function renderVociDraft(){
+  const box = document.getElementById('voci-editor-rows');
+  if(!box) return;
+  box.innerHTML = prevDraft.map(v=>`
+    <div class="voci-editor-row ${v.done?'locked':''}">
+      <input value="${esc(v.name||'')}" placeholder="Descrizione voce" ${v.done?'disabled':''} oninput="aggiornaVoceDraft('${v.id}','name',this.value)">
+      <input type="number" step="0.01" value="${v.amount||v.amount===0?v.amount:''}" placeholder="0.00" ${v.done?'disabled':''} oninput="aggiornaVoceDraft('${v.id}','amount',this.value)">
+      ${v.done ? `<span class="pill" style="background:var(--mint-dim); color:var(--mint-strong); padding:4px 6px; justify-self:center;" title="Già incassata">✓</span>` : `<button type="button" class="icon-btn btn-danger" title="Rimuovi voce" onclick="rimuoviVoceDraft('${v.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>`}
+    </div>
+  `).join('');
+  aggiornaTotaleVoci();
+}
+function aggiornaTotaleVoci(){
+  const totEl = document.getElementById('voci-total');
+  const amountEl = document.getElementById('f-amount');
+  if(!totEl || !amountEl) return;
+  if(!prevDraft.length){
+    totEl.innerHTML = `<span>Suddividi il preventivo in voci per incassarle una alla volta.</span>`;
+    amountEl.disabled = false;
+    return;
+  }
+  const st = prevStats({ voci: prevDraft });
+  amountEl.disabled = true;
+  amountEl.value = st.totale.toFixed(2);
+  totEl.innerHTML = `<span>${prevDraft.length} voc${prevDraft.length===1?'e':'i'}${st.incassato?` · già incassati ${euro(st.incassato)}`:''}</span><b>${euro(st.totale)}</b>`;
+}
+function aggiungiVoceDraft(){
+  prevDraft.push({ id:uid(), name:'', amount:'', done:false });
+  renderVociDraft();
+  const rows = document.querySelectorAll('#voci-editor-rows .voci-editor-row input');
+  if(rows.length>=2) rows[rows.length-2].focus();
+}
+function aggiornaVoceDraft(vid, campo, valore){
+  const v = prevDraft.find(x=>x.id===vid);
+  if(!v || v.done) return;
+  v[campo] = campo==='amount' ? valore : valore;
+  aggiornaTotaleVoci();
+}
+function rimuoviVoceDraft(vid){
+  prevDraft = prevDraft.filter(x=>x.id!==vid || x.done);
+  renderVociDraft();
 }
 function savePreventivato(id){
   const name = document.getElementById('f-name').value.trim();
-  const amount = parseFloat(document.getElementById('f-amount').value)||0;
   const date = document.getElementById('f-date').value;
   const note = document.getElementById('f-note').value.trim();
   if(!name) return toast('Inserisci un nome.');
+  const voci = prevDraft
+    .map(v=>({ ...v, name:String(v.name||'').trim(), amount: parseFloat(v.amount)||0 }))
+    .filter(v=> v.done || v.name || v.amount>0)
+    .map(v=>({ ...v, name: v.name || 'Voce' }));
+  const amount = voci.length ? null : (parseFloat(document.getElementById('f-amount').value)||0);
+  if(voci.length && voci.every(v=>v.done)) return toast('Aggiungi almeno una voce ancora da incassare.');
+
+  let p;
   if(id){
-    const p = db.preventivati.find(x=>x.id===id);
-    p.name=name; p.amount=amount; p.date=date; p.note=note;
+    p = db.preventivati.find(x=>x.id===id);
+    p.name=name; p.date=date; p.note=note;
   } else {
-    db.preventivati.push({ id:uid(), name, amount, date, note, color: ICON_COLORS[Math.floor(Math.random()*ICON_COLORS.length)] });
+    p = { id:uid(), name, date, note, color: ICON_COLORS[Math.floor(Math.random()*ICON_COLORS.length)] };
+    db.preventivati.push(p);
   }
+  if(voci.length){ p.voci = voci; recalcPrev(p); }
+  else { delete p.voci; p.amount = amount; }
+  prevDraft = [];
   saveDB(); closeModal(); renderAll(); toast('Evento salvato.');
+}
+
+function modalIncassaVoce(pid, vid){
+  const p = db.preventivati.find(x=>x.id===pid);
+  const v = p && (p.voci||[]).find(x=>x.id===vid);
+  if(!v || v.done) return;
+  if(!db.accounts.length) return toast('Crea prima almeno un conto.');
+  openModal(`
+    <h3>Incassa voce</h3>
+    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">"${esc(v.name)}" di <strong style="color:var(--text);">${esc(p.name)}</strong>. Puoi correggere l'importo se hai ricevuto una cifra diversa.</p>
+    <div class="field"><label>Importo ricevuto (€)</label><input id="f-voce-importo" type="number" step="0.01" value="${v.amount}"></div>
+    <div class="field"><label>Conto</label><select id="f-account">${db.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="confermaIncassaVoce('${pid}','${vid}')">Segna incassata</button>
+    </div>
+  `);
+}
+function confermaIncassaVoce(pid, vid){
+  const p = db.preventivati.find(x=>x.id===pid);
+  const v = p && (p.voci||[]).find(x=>x.id===vid);
+  if(!v || v.done) return;
+  const acc = db.accounts.find(x=>x.id===document.getElementById('f-account').value);
+  const importo = parseFloat(document.getElementById('f-voce-importo').value)||0;
+  if(!acc) return toast('Seleziona un conto.');
+  if(importo<=0) return toast('Inserisci un importo valido.');
+  acc.balance = Number(acc.balance) + importo;
+  db.movimenti.push({ id:uid(), type:'entrata', name:`${p.name} · ${v.name}`, amount:importo, date:oggiStr(), accountId:acc.id, category:'lavoro' });
+  v.amount = importo; v.done = true; v.doneDate = oggiStr(); v.accountId = acc.id;
+  recalcPrev(p);
+  const chiuso = p.voci.every(x=>x.done);
+  if(chiuso){
+    segnaStipendioRicevuto(p);
+    db.preventivati = db.preventivati.filter(x=>x.id!==pid);
+    prevExpanded.delete(pid);
+  } else {
+    prevExpanded.add(pid);
+  }
+  saveDB(); closeModal(); renderAll();
+  toast(chiuso ? `Tutte le voci incassate: "${p.name}" completato 🎉` : `${euro(importo)} su ${acc.name} · restano ${euro(p.amount)}`);
+}
+function segnaStipendioRicevuto(p){
+  if(!p.fromStipendioId) return;
+  const st = db.stipendi.find(x=>x.id===p.fromStipendioId);
+  if(st && !st.ricevuti.includes(p.fromStipendioMese)) st.ricevuti.push(p.fromStipendioMese);
 }
 function convertToAccount(id){
   const p = db.preventivati.find(x=>x.id===id);
-  if(!p || !db.accounts.length) return toast('Crea prima almeno un conto.');
+  if(!p) return;
+  if(!db.accounts.length) return toast('Crea prima almeno un conto.');
+  const conVoci = prevHasVoci(p);
+  const aperte = conVoci ? p.voci.filter(v=>!v.done) : [];
   openModal(`
-    <h3>Segna come incassato</h3>
-    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">A quale conto aggiungere ${euro(p.amount)} da "${esc(p.name)}"?</p>
+    <h3>${conVoci?'Incassa il residuo':'Segna come incassato'}</h3>
+    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">A quale conto aggiungere ${euro(p.amount)} da "${esc(p.name)}"?${conVoci?` Verranno segnate come incassate ${aperte.length} voc${aperte.length===1?'e':'i'}: ${aperte.map(v=>esc(v.name)).join(', ')}.`:''}</p>
     <div class="field"><select id="f-account">${db.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Annulla</button>
@@ -1633,13 +1798,12 @@ function confirmConvert(id){
   const accId = document.getElementById('f-account').value;
   const p = db.preventivati.find(x=>x.id===id);
   const acc = db.accounts.find(x=>x.id===accId);
+  if(!p || !acc) return toast('Seleziona un conto.');
   acc.balance = Number(acc.balance) + Number(p.amount);
   db.movimenti.push({ id:uid(), type:'entrata', name:p.name, amount:Number(p.amount), date:oggiStr(), accountId:acc.id, category:'altro' });
-  if(p.fromStipendioId){
-    const st = db.stipendi.find(x=>x.id===p.fromStipendioId);
-    if(st && !st.ricevuti.includes(p.fromStipendioMese)) st.ricevuti.push(p.fromStipendioMese);
-  }
+  segnaStipendioRicevuto(p);
   db.preventivati = db.preventivati.filter(x=>x.id!==id);
+  prevExpanded.delete(id);
   saveDB(); closeModal(); renderAll(); toast(`${euro(p.amount)} aggiunti a ${acc.name}.`);
 }
 
@@ -2548,7 +2712,7 @@ function renderSimulatore(){
       <div class="list">
         ${simState.movimenti.length ? [...simState.movimenti].reverse().map(m=>`
           <div class="row-item">
-            <div class="row-icon" style="background:${m.tipo==='entrata'?'var(--mint-dim)':'rgba(255,55,95,0.14)'}; color:${m.tipo==='entrata'?'var(--mint)':'#FF375F'};">
+            <div class="row-icon" style="background:${m.tipo==='entrata'?'var(--mint-dim)':'rgba(255,107,94,0.14)'}; color:${m.tipo==='entrata'?'var(--mint)':'#FF6B5E'};">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${m.tipo==='entrata'?'<path d="M12 19V5M5 12l7-7 7 7"/>':'<path d="M12 5v14M19 12l-7 7-7-7"/>'}</svg>
             </div>
             <div class="row-main"><div class="row-title">${esc(m.nome)}</div></div>
