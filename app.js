@@ -5,7 +5,7 @@
    - db.*           -> collections Firestore per utente
 ================================================================ */
 
-const ICON_COLORS = ['#34D27B','#C6F86B','#5CC8C2','#F2B84B','#FF6B5E','#8FD9A8'];
+const ICON_COLORS = ['#3DDC84','#E4E4E7','#5CC8C2','#F5B544','#FF6B6B','#9AE6B4'];
 const CATEGORIE = [
   { key:'casa', label:'Casa', color:'#5CC8C2' },
   { key:'cibo', label:'Cibo e spesa', color:'#F2B84B' },
@@ -128,7 +128,7 @@ let filters = {
   obiettivi: { q:'' },
   acquisti: { q:'' },
   conti: { q:'' },
-  task: { q:'' },
+  task: { q:'', prev:'' },
 };
 
 function saveDB(){
@@ -382,6 +382,11 @@ function toast(msg){
 }
 
 /* ==================== MODAL HELPERS ==================== */
+document.addEventListener('keydown', (e)=>{
+  if(e.key!=='Escape') return;
+  if(document.getElementById('modal-overlay').classList.contains('active')) closeModal();
+  else if(typeof prevDrawerId!=='undefined' && prevDrawerId) closePrevDrawer();
+});
 const overlay = document.getElementById('modal-overlay');
 const modalEl = document.getElementById('modal-content');
 function openModal(html){ modalEl.innerHTML = html; overlay.classList.add('active'); }
@@ -502,18 +507,15 @@ function renderCalendarGrid(pageKey){
 function modalGiornoEventi(dataStr){
   const evs = db.preventivati.filter(p=>p.date===dataStr);
   if(!evs.length) return;
+  if(evs.length===1) return openPrevDrawer(evs[0].id);
   openModal(`
     <h3>${fmtDate(dataStr)}</h3>
     <div class="list">
       ${evs.map(p=>`
-        <div class="row-item">
-          <div class="row-icon" style="background:${p.color}22; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
+        <div class="row-item" style="cursor:pointer;" onclick="closeModal(); openPrevDrawer('${p.id}')">
+          <div class="row-icon" style="background:${p.color}1f; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
           <div class="row-main"><div class="row-title">${esc(p.name)}</div>${p.note?`<div class="row-sub">${esc(p.note)}</div>`:''}</div>
-          <div class="row-amount" style="color:var(--blue)">${euro(p.amount)}</div>
-          <div class="row-actions">
-            <button class="icon-btn" onclick="closeModal(); modalPreventivato('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
-            <button class="icon-btn" style="color:var(--mint)" title="Segna come incassato" onclick="closeModal(); convertToAccount('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></button>
-          </div>
+          <div class="row-amount">${euro(p.amount)}</div>
         </div>
       `).join('')}
     </div>
@@ -526,7 +528,7 @@ function renderAll(){
   checkPreventivatiScaduti();
   checkSpeseFisseAutomatiche();
   checkAcquistiDaRimuovere();
-  const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderObiettivi, renderAcquisti, renderTask, renderAccount];
+  const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderObiettivi, renderAcquisti, renderTask, renderAccount, renderPrevDrawer];
   renderers.forEach(fn=>{
     try{ fn(); }
     catch(err){ console.error(`Errore in ${fn.name}:`, err); }
@@ -828,14 +830,15 @@ function renderDashboard(){
       ${upcoming.length ? upcoming.map(p=>{
         const d = daysUntil(p.date);
         const urgent = d<=5;
-        return `<div class="row-item">
-          <div class="row-icon" style="background:${p.color}22; color:${p.color};">${p.name.charAt(0).toUpperCase()}</div>
+        const ts = prevTaskStats(p.id);
+        return `<div class="row-item" style="cursor:pointer;" onclick="openPrevDrawer('${p.id}')">
+          <div class="row-icon" style="background:${p.color}1f; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
           <div class="row-main">
             <div class="row-title">${esc(p.name)}</div>
-            <div class="row-sub">${fmtDate(p.date)} · ${d===0?'oggi':d===1?'domani':d<0?'scaduto':'tra '+d+' giorni'}</div>
+            <div class="row-sub">${fmtDate(p.date)} · ${d===0?'oggi':d===1?'domani':d<0?'scaduto':'tra '+d+' giorni'}${ts.n?` · ${ts.fatte}/${ts.n} task`:''}</div>
           </div>
           ${urgent ? `<span class="pill" style="background:var(--amber-dim); color:var(--amber);">a breve</span>` : ''}
-          <div class="row-amount" style="color:var(--blue)">${euro(p.amount)}</div>
+          <div class="row-amount">${euro(p.amount)}</div>
         </div>`;
       }).join('') : emptyState('Nessuna scadenza imminente.')}
     </div>
@@ -884,7 +887,7 @@ function drawBreakdownChart(){
     type:'doughnut',
     data:{
       labels: db.accounts.map(a=>a.name),
-      datasets:[{ data: db.accounts.map(a=>Number(a.balance)), backgroundColor: db.accounts.map(a=>a.color), borderWidth:3, borderColor:'#0f1a14', borderRadius:6 }]
+      datasets:[{ data: db.accounts.map(a=>Number(a.balance)), backgroundColor: db.accounts.map(a=>a.color), borderWidth:3, borderColor:'#111112', borderRadius:6 }]
     },
     options:{
       responsive:true, maintainAspectRatio:false, cutout:'70%',
@@ -1131,7 +1134,7 @@ function drawCategorieChart(speseCategoria){
     type:'doughnut',
     data:{
       labels: entries.map(c=>c.label),
-      datasets:[{ data: entries.map(c=>speseCategoria[c.key]), backgroundColor: entries.map(c=>c.color), borderWidth:3, borderColor:'#0f1a14', borderRadius:6 }]
+      datasets:[{ data: entries.map(c=>speseCategoria[c.key]), backgroundColor: entries.map(c=>c.color), borderWidth:3, borderColor:'#111112', borderRadius:6 }]
     },
     options:{
       responsive:true, maintainAspectRatio:false, cutout:'70%',
@@ -1332,6 +1335,7 @@ function checkPreventivatiScaduti(){
         mancante.note = p.note;
       }
       db.mancanti.push(mancante);
+      scollegaTaskEvento(p.id);
       changed = true;
     } else {
       rimasti.push(p);
@@ -1558,7 +1562,7 @@ function deleteEccezione(stipendioId, id){
    (p.amount) diventa il RESIDUO ancora da incassare. Quando tutte le voci sono
    incassate il preventivato si chiude da solo.
 ============================================================================= */
-let prevExpanded = new Set(); // stato di sessione: quali preventivati hanno il pannello voci aperto
+let prevDrawerId = null;      // evento aperto nel pannello di dettaglio
 let prevDraft = [];           // voci in modifica dentro il modal
 
 function prevHasVoci(p){ return Array.isArray(p.voci) && p.voci.length>0; }
@@ -1570,72 +1574,196 @@ function prevStats(p){
   return { totale, incassato, residuo: totale-incassato, n:p.voci.length, fatte, pct: totale ? Math.round(incassato/totale*100) : Math.round(fatte/p.voci.length*100) };
 }
 function recalcPrev(p){ if(prevHasVoci(p)) p.amount = prevStats(p).residuo; }
-function togglePrevExpand(id){
-  if(prevExpanded.has(id)) prevExpanded.delete(id); else prevExpanded.add(id);
-  renderPreventivati();
+function prevTasks(pid){ return db.tasks.filter(t=>t.prevId===pid); }
+function prevTaskStats(pid){ const l = prevTasks(pid); return { n:l.length, fatte:l.filter(t=>t.done).length }; }
+// quando un evento si chiude (incassato, scaduto o eliminato) le sue task restano,
+// scollegate, ma ricordano il nome dell'evento per non perdere il contesto
+function scollegaTaskEvento(pid){ db.tasks.forEach(t=>{ if(t.prevId===pid) t.prevId = null; }); }
+function quandoTesto(date){
+  if(!date) return 'Senza data';
+  const d = daysUntil(date);
+  return d===0 ? 'Oggi' : d===1 ? 'Domani' : d<0 ? 'Passato' : d<=14 ? `Tra ${d} giorni` : fmtDate(date);
 }
 
 function renderPreventivati(){
   const f = filters.preventivati;
   const total = db.preventivati.reduce((s,p)=>s+Number(p.amount),0);
-  let sorted = [...db.preventivati].sort((a,b)=> new Date(a.date||'2100-01-01') - new Date(b.date||'2100-01-01'));
+  let sorted = [...db.preventivati].sort((a,b)=> (a.date||'2100-01-01').localeCompare(b.date||'2100-01-01'));
   if(f.q) sorted = sorted.filter(p=> matches(p.name,f.q) || matches(p.note,f.q) || (p.voci||[]).some(v=>matches(v.name,f.q)));
   document.getElementById('page-preventivati').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Appuntamenti &amp; Preventivati</div><div class="page-sub">${db.preventivati.length} eventi · ${euro(total)} ancora da incassare</div></div>
+      <div><div class="page-title">Eventi</div><div class="page-sub">${db.preventivati.length} in corso · <strong style="color:var(--text);">${euro(total)}</strong> da incassare</div></div>
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalPreventivato()">+ Nuovo evento</button></div>
     </div>
-    ${vistaToggle('preventivati')}
+    <div class="toolbar-row">
+      ${vistaToggle('preventivati')}
+      ${calendarState.preventivati.on ? '' : searchBar('preventivati','Cerca evento o voce...')}
+    </div>
     ${calendarState.preventivati.on ? renderCalendarGrid('preventivati') : `
-    ${searchBar('preventivati','Cerca evento o voce...')}
-    <div class="list">
-      ${sorted.length ? sorted.map(p=>prevRowHtml(p)).join('') : emptyState(db.preventivati.length ? 'Nessun evento corrisponde alla ricerca.' : 'Nessun evento preventivato. Aggiungine uno e suddividilo in voci.')}
+    <div class="event-grid">
+      ${sorted.length ? sorted.map(p=>prevCardHtml(p)).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState(db.preventivati.length ? 'Nessun evento corrisponde alla ricerca.' : 'Nessun evento. Crealo, dividilo in voci e collega le task da fare.')}</div>`}
     </div>
     `}
   `;
 }
-function prevRowHtml(p){
+function prevCardHtml(p){
+  const st = prevStats(p);
+  const ts = prevTaskStats(p.id);
   const d = p.date ? daysUntil(p.date) : null;
   const urgente = d!==null && d>=0 && d<=3;
-  const conVoci = prevHasVoci(p);
+  return `<button class="event-card ${urgente?'urgent':''}" onclick="openPrevDrawer('${p.id}')">
+    <div class="event-card-top">
+      <div class="event-avatar" style="background:${p.color}1f; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
+      <div class="event-card-titles">
+        <div class="event-card-name">${esc(p.name)}</div>
+        <div class="event-card-date">${p.date?fmtDate(p.date)+' · ':''}${quandoTesto(p.date)}</div>
+      </div>
+      ${urgente ? `<span class="pill" style="background:var(--amber-dim); color:var(--amber);">a breve</span>` : ''}
+    </div>
+    <div class="event-card-amount">${euro(p.amount)}<span>${st.n ? `di ${euro(st.totale)}` : 'da incassare'}</span></div>
+    ${st.n ? `<div class="progress-track slim"><div class="progress-fill" style="width:${st.pct}%; background:var(--mint);"></div></div>` : ''}
+    <div class="event-card-meta">
+      <span class="meta-chip ${st.n && st.fatte===st.n?'ok':''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>${st.n ? `${st.fatte}/${st.n} voci` : 'Importo unico'}</span>
+      <span class="meta-chip ${ts.n && ts.fatte===ts.n?'ok':''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>${ts.n ? `${ts.fatte}/${ts.n} task` : 'Nessuna task'}</span>
+    </div>
+  </button>`;
+}
+
+/* ---------- pannello di dettaglio evento (laterale su desktop, dal basso su mobile) ---------- */
+function openPrevDrawer(id){
+  prevDrawerId = id;
+  renderPrevDrawer();
+  document.getElementById('drawer-overlay').classList.add('active');
+}
+function closePrevDrawer(){
+  prevDrawerId = null;
+  document.getElementById('drawer-overlay').classList.remove('active');
+}
+function renderPrevDrawer(){
+  if(!prevDrawerId) return;
+  const p = db.preventivati.find(x=>x.id===prevDrawerId);
+  if(!p){ closePrevDrawer(); return; }
   const st = prevStats(p);
-  const aperto = conVoci && prevExpanded.has(p.id);
-  const sub = `${fmtDate(p.date)}${d!==null ? ' · '+(d===0?'oggi':d<0?'passato':'tra '+d+' giorni') : ''}${conVoci ? ` · ${st.fatte}/${st.n} incassate` : ''}${p.note?' · '+esc(p.note):''}`;
-  return `<div class="row-item prev-row ${conVoci?'has-voci':''} ${aperto?'expanded':''}">
-    <div class="row-icon" style="background:${p.color}22; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
-    <div class="row-main" ${conVoci?`onclick="togglePrevExpand('${p.id}')"`:''}>
-      <div class="row-title">${esc(p.name)}${conVoci?`<span class="prev-voci-count">${st.n} voc${st.n===1?'e':'i'}</span>`:''}</div>
-      <div class="row-sub">${sub}</div>
-    </div>
-    ${urgente ? `<span class="pill" style="background:var(--amber-dim); color:var(--amber);">a breve</span>` : ''}
-    <div class="row-amount" style="color:var(--blue)" title="${conVoci?'Residuo da incassare':''}">${euro(p.amount)}</div>
-    <div class="row-actions">
-      ${conVoci ? `<button class="icon-btn prev-expand" title="${aperto?'Chiudi voci':'Mostra voci'}" onclick="togglePrevExpand('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>` : ''}
-      <button class="icon-btn" title="Modifica" onclick="modalPreventivato('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
-      <button class="icon-btn" style="color:var(--mint)" title="${conVoci?'Incassa tutto il residuo':'Segna come incassato'}" onclick="convertToAccount('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></button>
-      <button class="icon-btn btn-danger" title="Elimina" onclick="deleteItem('preventivati','${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></button>
-    </div>
-    ${aperto ? `
-    <div class="prev-panel">
-      <div class="prev-panel-head">
-        <div class="prev-panel-stats">Incassato <b>${euro(st.incassato)}</b> su <b>${euro(st.totale)}</b></div>
-        <div class="progress-track"><div class="progress-fill" style="width:${st.pct}%; background:linear-gradient(90deg, var(--mint), var(--lime));"></div></div>
-        <div class="prev-panel-stats"><b>${st.pct}%</b></div>
+  const tasks = prevTasks(p.id);
+  const ts = prevTaskStats(p.id);
+  const tasksLibere = db.tasks.filter(t=>!t.prevId && !t.done);
+  const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg>';
+
+  document.getElementById('drawer').innerHTML = `
+    <div class="drawer-head">
+      <div class="event-avatar lg" style="background:${p.color}1f; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
+      <div style="flex:1; min-width:0;">
+        <div class="drawer-title">${esc(p.name)}</div>
+        <div class="drawer-sub">${p.date?fmtDate(p.date)+' · ':''}${quandoTesto(p.date)}</div>
       </div>
-      ${p.voci.map(v=>{
-        const acc = v.accountId ? db.accounts.find(a=>a.id===v.accountId) : null;
-        return `<div class="voce-row ${v.done?'done':''}">
-          <button class="voce-check ${v.done?'checked':''}" ${v.done?'disabled title="Già incassata"':`title="Segna come incassata" onclick="modalIncassaVoce('${p.id}','${v.id}')"`}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg></button>
-          <div class="voce-name"><span class="voce-label">${esc(v.name)}</span>${v.done ? `<small>Incassata ${fmtDate(v.doneDate)}${acc?' su '+esc(acc.name):''}</small>` : ''}</div>
-          <div class="voce-amount">${euro(v.amount)}</div>
-        </div>`;
-      }).join('')}
-      <div class="prev-panel-foot">
-        <button class="btn" onclick="modalPreventivato('${p.id}')">Modifica voci</button>
-        ${st.residuo>0 ? `<button class="btn btn-primary" onclick="convertToAccount('${p.id}')">Incassa residuo ${euro(st.residuo)}</button>` : ''}
+      <button class="icon-btn" title="Chiudi" onclick="closePrevDrawer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+    </div>
+
+    <div class="drawer-hero">
+      <div class="drawer-hero-label">Da incassare</div>
+      <div class="drawer-hero-amount">${euro(p.amount)}</div>
+      ${st.n ? `
+        <div class="progress-track slim"><div class="progress-fill" style="width:${st.pct}%; background:var(--mint);"></div></div>
+        <div class="drawer-hero-sub">Incassato ${euro(st.incassato)} su ${euro(st.totale)} · ${st.pct}%</div>` : ''}
+    </div>
+
+    <div class="drawer-actions">
+      <button class="action-tile primary" onclick="convertToAccount('${p.id}')" ${p.amount>0?'':'disabled'}>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span>${st.n?'Incassa resto':'Incassa'}
+      </button>
+      <button class="action-tile" onclick="modalPreventivato('${p.id}')">
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></span>Modifica
+      </button>
+      <button class="action-tile" onclick="modalTask(null,'${p.id}')">
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>Nuova task
+      </button>
+      <button class="action-tile danger" onclick="modalEliminaPreventivato('${p.id}')">
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></span>Elimina
+      </button>
+    </div>
+
+    <div class="drawer-section">
+      <div class="drawer-section-head"><span>Voci</span>${st.n?`<span class="count">${st.fatte}/${st.n}</span>`:''}</div>
+      ${st.n ? `<div class="sheet-list">
+        ${p.voci.map(v=>{
+          const acc = v.accountId ? db.accounts.find(a=>a.id===v.accountId) : null;
+          return `<div class="voce-row ${v.done?'done':''}">
+            <button class="voce-check ${v.done?'checked':''}" ${v.done?'disabled title="Già incassata"':`title="Segna come incassata" onclick="modalIncassaVoce('${p.id}','${v.id}')"`}>${ICON_CHECK}</button>
+            <div class="voce-name"><span class="voce-label">${esc(v.name)}</span><small>${v.done ? `Incassata ${fmtDate(v.doneDate)}${acc?' su '+esc(acc.name):''}` : 'Tocca il cerchio quando la ricevi'}</small></div>
+            <div class="voce-amount">${euro(v.amount)}</div>
+          </div>`;
+        }).join('')}
+      </div>` : `<div class="sheet-empty">Importo unico. <a href="#" onclick="modalPreventivato('${p.id}'); return false;">Dividilo in voci</a> (acconto, saldo, extra…) per incassarlo a rate.</div>`}
+    </div>
+
+    <div class="drawer-section">
+      <div class="drawer-section-head"><span>Task</span>${ts.n?`<span class="count">${ts.fatte}/${ts.n}</span>`:''}</div>
+      <div class="sheet-list">
+        ${tasks.map(t=>`
+          <div class="voce-row ${t.done?'done':''}">
+            <button class="voce-check ${t.done?'checked':''}" title="${t.done?'Riapri':'Completa'}" onclick="toggleTaskEvento('${t.id}')">${ICON_CHECK}</button>
+            <div class="voce-name" style="cursor:pointer;" onclick="modalTask('${t.id}')"><span class="voce-label">${esc(t.text)}</span>${(t.dueDate||t.priority)?`<small>${t.priority?esc(t.priority):''}${t.priority&&t.dueDate?' · ':''}${t.dueDate?'entro '+fmtDate(t.dueDate):''}</small>`:''}</div>
+            <button class="icon-btn" title="Scollega dall'evento" onclick="scollegaTask('${t.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </div>`).join('')}
+        <div class="sheet-add">
+          <input id="drawer-task-input" placeholder="Aggiungi una task per questo evento…" onkeydown="if(event.key==='Enter'){aggiungiTaskEvento('${p.id}')}">
+          <button onclick="aggiungiTaskEvento('${p.id}')">Aggiungi</button>
+        </div>
       </div>
-    </div>` : ''}
-  </div>`;
+      ${tasksLibere.length ? `
+      <div class="sheet-link">
+        <select id="drawer-link-select"><option value="">Collega una task esistente…</option>${tasksLibere.map(t=>`<option value="${t.id}">${esc(t.text)}</option>`).join('')}</select>
+        <button class="btn" onclick="collegaTaskEsistente('${p.id}')">Collega</button>
+      </div>` : ''}
+    </div>
+
+    ${p.note ? `<div class="drawer-section"><div class="drawer-section-head"><span>Note</span></div><div class="sheet-empty" style="color:var(--text-dim);">${esc(p.note)}</div></div>` : ''}
+  `;
+}
+function toggleTaskEvento(tid){
+  const t = db.tasks.find(x=>x.id===tid); if(!t) return;
+  t.done = !t.done;
+  saveDB(); renderAll();
+}
+function aggiungiTaskEvento(pid){
+  const input = document.getElementById('drawer-task-input');
+  const text = input ? input.value.trim() : '';
+  if(!text) return;
+  const p = db.preventivati.find(x=>x.id===pid);
+  db.tasks.push({ id:uid(), text, note:'', priority:'', dueDate: p&&p.date ? p.date : '', done:false, subtasks:[], prevId:pid, prevNome:p?p.name:'' });
+  saveDB(); renderAll();
+  document.getElementById('drawer-task-input')?.focus();
+}
+function collegaTaskEsistente(pid){
+  const sel = document.getElementById('drawer-link-select');
+  const t = sel && db.tasks.find(x=>x.id===sel.value);
+  const p = db.preventivati.find(x=>x.id===pid);
+  if(!t || !p) return toast('Scegli una task.');
+  t.prevId = pid; t.prevNome = p.name;
+  saveDB(); renderAll(); toast('Task collegata.');
+}
+function scollegaTask(tid){
+  const t = db.tasks.find(x=>x.id===tid); if(!t) return;
+  t.prevId = null; t.prevNome = '';
+  saveDB(); renderAll(); toast('Task scollegata: resta nella lista Task.');
+}
+function modalEliminaPreventivato(id){
+  const p = db.preventivati.find(x=>x.id===id); if(!p) return;
+  const n = prevTasks(id).length;
+  openModal(`
+    <h3>Eliminare "${esc(p.name)}"?</h3>
+    <p style="color:var(--text-dim); font-size:13px; line-height:1.5;">L'evento e le sue voci verranno rimossi. I soldi già incassati restano sui conti.${n?` Le ${n} task collegate restano nella lista Task.`:''}</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-danger-solid" onclick="confermaEliminaPreventivato('${id}')">Elimina</button>
+    </div>
+  `);
+}
+function confermaEliminaPreventivato(id){
+  scollegaTaskEvento(id);
+  db.preventivati = db.preventivati.filter(x=>x.id!==id);
+  closeModal(); closePrevDrawer();
+  saveDB(); renderAll(); toast('Evento eliminato.');
 }
 
 function modalPreventivato(id){
@@ -1730,8 +1858,10 @@ function savePreventivato(id){
   }
   if(voci.length){ p.voci = voci; recalcPrev(p); }
   else { delete p.voci; p.amount = amount; }
+  prevTasks(p.id).forEach(t=>{ t.prevNome = p.name; });
   prevDraft = [];
   saveDB(); closeModal(); renderAll(); toast('Evento salvato.');
+  if(!id && document.getElementById('page-preventivati').classList.contains('active')) openPrevDrawer(p.id);
 }
 
 function modalIncassaVoce(pid, vid){
@@ -1765,10 +1895,8 @@ function confermaIncassaVoce(pid, vid){
   const chiuso = p.voci.every(x=>x.done);
   if(chiuso){
     segnaStipendioRicevuto(p);
+    scollegaTaskEvento(pid);
     db.preventivati = db.preventivati.filter(x=>x.id!==pid);
-    prevExpanded.delete(pid);
-  } else {
-    prevExpanded.add(pid);
   }
   saveDB(); closeModal(); renderAll();
   toast(chiuso ? `Tutte le voci incassate: "${p.name}" completato 🎉` : `${euro(importo)} su ${acc.name} · restano ${euro(p.amount)}`);
@@ -1802,8 +1930,8 @@ function confirmConvert(id){
   acc.balance = Number(acc.balance) + Number(p.amount);
   db.movimenti.push({ id:uid(), type:'entrata', name:p.name, amount:Number(p.amount), date:oggiStr(), accountId:acc.id, category:'altro' });
   segnaStipendioRicevuto(p);
+  scollegaTaskEvento(id);
   db.preventivati = db.preventivati.filter(x=>x.id!==id);
-  prevExpanded.delete(id);
   saveDB(); closeModal(); renderAll(); toast(`${euro(p.amount)} aggiunti a ${acc.name}.`);
 }
 
@@ -2268,8 +2396,16 @@ function renderTask(){
   // completato/non completato (i completati vanno in fondo), il sort è stabile
   // quindi a parità di stato l'ordine dell'array (db.tasks) resta quello scelto dall'utente.
   let list = db.tasks.slice().sort((a,b)=> (a.done?1:0) - (b.done?1:0));
-  const dragDisabled = !!f.q;
-  if(f.q) list = list.filter(t=> matches(t.text,f.q) || matches(t.note,f.q) || (t.subtasks||[]).some(st=>matches(st.text,f.q)));
+  const dragDisabled = !!f.q || !!f.prev;
+  if(f.q) list = list.filter(t=> matches(t.text,f.q) || matches(t.note,f.q) || matches(t.prevNome,f.q) || (t.subtasks||[]).some(st=>matches(st.text,f.q)));
+  if(f.prev==='_none') list = list.filter(t=>!t.prevId);
+  else if(f.prev) list = list.filter(t=>t.prevId===f.prev);
+  const prevFilterHtml = db.preventivati.length ? `
+    <select class="filter-select" onchange="setFilter('task','prev',this.value)">
+      <option value="">Tutti gli eventi</option>
+      <option value="_none" ${f.prev==='_none'?'selected':''}>Senza evento</option>
+      ${db.preventivati.map(p=>`<option value="${p.id}" ${f.prev===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
+    </select>` : '';
 
   document.getElementById('page-task').innerHTML = `
     <div class="topbar">
@@ -2277,7 +2413,7 @@ function renderTask(){
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalTask()">+ Nuovo task</button></div>
     </div>
 
-    ${searchBar('task','Cerca task o sotto-task...')}
+    ${searchBar('task','Cerca task, sotto-task o evento...', prevFilterHtml)}
     <div class="task-list" id="task-list">
       ${list.length ? list.map(t=>taskCardHtml(t, dragDisabled)).join('') : emptyState(db.tasks.length ? 'Nessun task corrisponde alla ricerca.' : 'Nessun task ancora. Aggiungi il primo lavoro da fare e organizzalo in sotto-task.')}
     </div>
@@ -2290,6 +2426,7 @@ function taskCardHtml(t, dragDisabled){
   const { total, done, pct } = taskProgress(t);
   const expanded = taskExpanded.has(t.id);
   const overdue = t.dueDate && !t.done && daysUntil(t.dueDate) < 0;
+  const evTask = t.prevId ? db.preventivati.find(p=>p.id===t.prevId) : null;
   const prColor = t.priority==='Alta' ? 'var(--coral)' : t.priority==='Media' ? 'var(--amber)' : t.priority==='Bassa' ? 'var(--blue)' : null;
   const prBg = t.priority==='Alta' ? 'var(--coral-dim)' : t.priority==='Media' ? 'var(--amber-dim)' : t.priority==='Bassa' ? 'var(--blue-dim)' : null;
 
@@ -2306,6 +2443,7 @@ function taskCardHtml(t, dragDisabled){
         </div>
         ${t.note ? `<div class="task-note">${esc(t.note)}</div>` : ''}
         <div class="task-meta-row">
+          ${evTask ? `<span class="task-pill event-link" onclick="event.stopPropagation(); openPrevDrawer('${evTask.id}')" title="Apri evento"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>${esc(evTask.name)}</span>` : (t.prevNome ? `<span class="task-pill" style="background:var(--surface-2); color:var(--text-faint);" title="Evento chiuso">${esc(t.prevNome)} · chiuso</span>` : '')}
           ${t.priority ? `<span class="task-pill" style="background:${prBg}; color:${prColor};">${esc(t.priority)}</span>` : ''}
           ${t.dueDate ? `<span class="task-pill" style="background:${overdue?'var(--coral-dim)':'var(--surface-2)'}; color:${overdue?'var(--coral)':'var(--text-dim)'};">${overdue?'Scaduto ':''}${fmtDate(t.dueDate)}</span>` : ''}
           ${total ? `<span class="task-pill" style="background:var(--surface-2); color:var(--text-dim);">${done}/${total} sotto-task</span>` : ''}
@@ -2405,9 +2543,10 @@ function reorderTask(id, dropBeforeId){
   saveDB(); renderTask();
 }
 
-function modalTask(id){
+function modalTask(id, presetPrevId){
   const isEdit = !!id;
   const t = isEdit ? db.tasks.find(x=>x.id===id) : null;
+  const prevSel = t ? (t.prevId||'') : (presetPrevId||'');
   openModal(`
     <h3>${isEdit?'Modifica task':'Nuovo task'}</h3>
     <div class="field"><label>Cosa c'è da fare</label><input id="f-name" value="${t?esc(t.text):''}" placeholder="Es. Completare il report mensile"></div>
@@ -2421,6 +2560,10 @@ function modalTask(id){
       </select></div>
       <div class="field"><label>Scadenza (opzionale)</label><input id="f-due" type="date" value="${t?t.dueDate||'':''}"></div>
     </div>
+    <div class="field"><label>Evento collegato</label><select id="f-task-prev">
+      <option value="">Nessuno</option>
+      ${db.preventivati.map(p=>`<option value="${p.id}" ${prevSel===p.id?'selected':''}>${esc(p.name)}${p.date?' · '+fmtDate(p.date):''}</option>`).join('')}
+    </select></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Annulla</button>
       <button class="btn btn-primary" onclick="saveTask('${id||''}')">${isEdit?'Salva':'Aggiungi'}</button>
@@ -2432,12 +2575,15 @@ function saveTask(id){
   const note = document.getElementById('f-note').value.trim();
   const priority = document.getElementById('f-priority').value;
   const dueDate = document.getElementById('f-due').value;
+  const prevId = document.getElementById('f-task-prev').value || null;
+  const ev = prevId ? db.preventivati.find(p=>p.id===prevId) : null;
   if(!text) return toast('Inserisci una descrizione.');
   if(id){
     const t = db.tasks.find(x=>x.id===id);
     t.text=text; t.note=note; t.priority=priority; t.dueDate=dueDate;
+    if(prevId!==t.prevId){ t.prevId = prevId; t.prevNome = ev ? ev.name : ''; }
   } else {
-    db.tasks.push({ id:uid(), text, note, priority, dueDate, done:false, subtasks:[] });
+    db.tasks.push({ id:uid(), text, note, priority, dueDate, done:false, subtasks:[], prevId, prevNome: ev?ev.name:'' });
   }
   saveDB(); closeModal(); renderAll(); toast(id?'Task aggiornato.':'Task aggiunto.');
 }
@@ -2958,6 +3104,7 @@ async function confermaEliminaAccount(){
 
 /* ==================== SHARED DELETE ==================== */
 function deleteItem(collection, id){
+  if(collection==='preventivati') scollegaTaskEvento(id);
   db[collection] = db[collection].filter(x=>x.id!==id);
   saveDB(); renderAll(); toast('Eliminato.');
 }
