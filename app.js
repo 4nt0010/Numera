@@ -125,7 +125,7 @@ let filters = {
   preventivati: { q:'' },
   mancanti: { q:'' },
   fisse: { q:'' },
-  obiettivi: { q:'' },
+  clienti: { q:'' },
   acquisti: { q:'' },
   conti: { q:'' },
   task: { q:'', prev:'' },
@@ -157,7 +157,7 @@ document.getElementById('toggle-link').addEventListener('click', (e)=>{
   document.getElementById('login-heading').textContent = isReg ? 'Crea account' : 'Bentornato';
   document.getElementById('login-sub').textContent = isReg
     ? 'Registrati con la tua email per proteggere e sincronizzare i tuoi dati finanziari.'
-    : 'Accedi al tuo cockpit finanziario per gestire eventi, conti e obiettivi.';
+    : 'Accedi al tuo cockpit finanziario per gestire preventivi, conti e clienti.';
   document.getElementById('login-submit').textContent = isReg ? 'Crea account' : 'Accedi';
   document.getElementById('login-toggle').innerHTML = isReg
     ? 'Hai già un account? <a href="#" id="toggle-link2">Accedi</a>'
@@ -244,7 +244,6 @@ async function startSession(name, userId){
   if(!db.oreSettimanali) db.oreSettimanali = 40;
   if(!db.risparmiatoRinunce) db.risparmiatoRinunce = 0;
   if(!db.tasks) db.tasks = [];
-  db.preventivati.forEach(p=>recalcPrev(p)); // tiene allineato il residuo delle voci
   snapshots = await fbLoadSnapshots(userId);
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').classList.add('active');
@@ -317,8 +316,9 @@ document.getElementById('sidebar-overlay').addEventListener('click', closeSideba
 /* ==================== KPI BAR (dati principali sempre visibili) ==================== */
 function computeTotals(){
   const totalConti = db.accounts.reduce((s,a)=>s+Number(a.balance||0),0);
-  const totalPrev = db.preventivati.reduce((s,a)=>s+Number(a.amount||0),0);
-  const totalMancanti = db.mancanti.reduce((s,a)=>s+Number(a.amount||0),0);
+  const ritardo = p=> typeof prevInRitardo==='function' && prevInRitardo(p);
+  const totalPrev = db.preventivati.filter(p=>!ritardo(p)).reduce((s,a)=>s+Number(a.amount||0),0);
+  const totalMancanti = db.mancanti.reduce((s,a)=>s+Number(a.amount||0),0) + db.preventivati.filter(ritardo).reduce((s,a)=>s+Number(a.amount||0),0);
   const totaleGenerale = totalConti + totalPrev + totalMancanti;
   return { totalConti, totalPrev, totalMancanti, totaleGenerale };
 }
@@ -389,7 +389,7 @@ document.addEventListener('keydown', (e)=>{
 });
 const overlay = document.getElementById('modal-overlay');
 const modalEl = document.getElementById('modal-content');
-function openModal(html){ modalEl.innerHTML = html; overlay.classList.add('active'); }
+function openModal(html){ modalEl.className = 'modal'; modalEl.innerHTML = html; overlay.classList.add('active'); }
 function closeModal(){ overlay.classList.remove('active'); modalEl.innerHTML=''; }
 overlay.addEventListener('click', (e)=>{ if(e.target===overlay) closeModal(); });
 
@@ -399,7 +399,7 @@ const RENDER_MAP = {
   preventivati: ()=>renderPreventivati(),
   mancanti: ()=>renderMancanti(),
   fisse: ()=>renderFisse(),
-  obiettivi: ()=>renderObiettivi(),
+  clienti: ()=>renderClienti(),
   acquisti: ()=>renderAcquisti(),
   conti: ()=>renderConti(),
   task: ()=>renderTask(),
@@ -524,11 +524,13 @@ function modalGiornoEventi(dataStr){
 }
 
 function renderAll(){
+  db.preventivati.forEach(migratePrev);
   checkStipendioAutomatico();
   checkPreventivatiScaduti();
   checkSpeseFisseAutomatiche();
   checkAcquistiDaRimuovere();
-  const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderObiettivi, renderAcquisti, renderTask, renderAccount, renderPrevDrawer];
+  db.preventivati.forEach(migratePrev);
+  const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderClienti, renderAcquisti, renderTask, renderAccount, renderPrevDrawer];
   renderers.forEach(fn=>{
     try{ fn(); }
     catch(err){ console.error(`Errore in ${fn.name}:`, err); }
@@ -560,29 +562,42 @@ function updateBadge(){
 /* ==================== DASHBOARD ==================== */
 let chartTrend, chartBreakdown;
 /* ==================== DASHBOARD ====================
-   Una sola fonte di blocchi (dashBlocks) usata sia su desktop (griglia 12 colonne)
-   sia su mobile (colonna unica sotto la card Saldo). Ordine pensato per domande:
-   1) quanto ho?  2) cosa entra/esce questo mese?  3) cosa devo incassare / fare a breve?
-   4) dove sono i soldi e a che punto sono gli obiettivi?
+   Blocchi costruiti una volta (dashBlocks) e disposti in due modi:
+   - desktop: griglia 12 colonne
+   - mobile: stile app bancaria (saldo, carte conti scorrevoli, azioni rapide, liste brevi)
 ====================================================== */
+const ICO = {
+  down:'<path d="M12 5v14M5 12l7 7 7-7"/>',
+  up:'<path d="M12 19V5M5 12l7-7 7 7"/>',
+  swap:'<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>',
+  doc:'<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>',
+  check:'<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>',
+  card:'<rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+  alert:'<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/>',
+  repeat:'<path d="M17 2l4 4-4 4M3 12v-2a4 4 0 014-4h14M7 22l-4-4 4-4M21 12v2a4 4 0 01-4 4H3"/>',
+  cart:'<path d="M6 2l1.5 4M18 2l-1.5 4M3.5 8h17l-1.6 9.6a2 2 0 01-2 1.7H7.1a2 2 0 01-2-1.7L3.5 8z"/>',
+  cash:'<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="12" cy="12" r="3"/>',
+  flask:'<path d="M9 2v6L4 18a2 2 0 002 3h12a2 2 0 002-3l-5-10V2M9 2h6M8 15h8"/>',
+  users:'<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>',
+};
+function svgI(name, size){ return `<svg viewBox="0 0 24 24" width="${size||18}" height="${size||18}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICO[name]}</svg>`; }
 const ADD_ACTIONS = [
-  { label:'Spesa', fn:"modalMovimento(null,'uscita')", bg:'rgba(255,55,95,0.14)', color:'#FF375F' },
-  { label:'Entrata', fn:"modalMovimento(null,'entrata')", bg:'var(--mint-dim)', color:'var(--mint)' },
-  { label:'Trasferimento', fn:"modalMovimento(null,'trasferimento')", bg:'var(--blue-dim)', color:'var(--blue)' },
-  { label:'Evento', fn:'modalPreventivato()', bg:'var(--blue-dim)', color:'var(--blue)' },
-  { label:'Task', fn:'modalTask()', bg:'rgba(48,209,88,0.14)', color:'var(--mint)' },
-  { label:'Conto', fn:'modalAccount()', bg:'var(--mint-dim)', color:'var(--mint)' },
-  { label:'Mancante', fn:'modalMancante()', bg:'var(--coral-dim)', color:'var(--coral)' },
-  { label:'Spesa fissa', fn:'modalFissa()', bg:'var(--amber-dim)', color:'var(--amber)' },
-  { label:'Obiettivo', fn:'modalObiettivo()', bg:'rgba(178,124,255,0.14)', color:'#B27CFF' },
-  { label:'Acquisto', fn:'modalAcquisto()', bg:'rgba(79,209,232,0.14)', color:'#4FD1E8' },
+  { label:'Spesa', fn:"modalMovimento(null,'uscita')", bg:'rgba(255,55,95,0.14)', color:'#FF375F', ico:'down' },
+  { label:'Entrata', fn:"modalMovimento(null,'entrata')", bg:'var(--mint-dim)', color:'var(--mint)', ico:'up' },
+  { label:'Preventivo', fn:'modalPreventivato()', bg:'var(--blue-dim)', color:'var(--blue)', ico:'doc' },
+  { label:'Task', fn:'modalTask()', bg:'rgba(48,209,88,0.14)', color:'var(--mint)', ico:'check' },
+  { label:'Trasferimento', fn:"modalMovimento(null,'trasferimento')", bg:'var(--blue-dim)', color:'var(--blue)', ico:'swap' },
+  { label:'Conto', fn:'modalAccount()', bg:'var(--mint-dim)', color:'var(--mint)', ico:'card' },
+  { label:'Mancante', fn:'modalMancante()', bg:'var(--coral-dim)', color:'var(--coral)', ico:'alert' },
+  { label:'Spesa fissa', fn:'modalFissa()', bg:'var(--amber-dim)', color:'var(--amber)', ico:'repeat' },
+  { label:'Acquisto', fn:'modalAcquisto()', bg:'rgba(79,209,232,0.14)', color:'#4FD1E8', ico:'cart' },
 ];
-function toggleAddMenu(e){
-  e.stopPropagation();
-  document.getElementById('add-menu')?.classList.toggle('open');
-}
+function toggleAddMenu(e){ e.stopPropagation(); document.getElementById('add-menu')?.classList.toggle('open'); }
 document.addEventListener('click', ()=> document.getElementById('add-menu')?.classList.remove('open'));
 
+function plur(n, sing, plu){ return `${n} ${n===1?sing:plu}`; }
+function dashLink(label, page){ return `<button class="dash-link" onclick="goToPage('${page}')">${label} →</button>`; }
+const ICO_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg>';
 function dashTrend(){
   const snaps = getSnapshots();
   const totalConti = computeTotals().totalConti;
@@ -593,13 +608,9 @@ function dashTrend(){
   const abs = totalConti - ref.total;
   return { abs, pct: ref.total ? abs/Math.abs(ref.total)*100 : null };
 }
-function plur(n, sing, plu){ return `${n} ${n===1?sing:plu}`; }
-function dashLink(label, page){ return `<button class="dash-link" onclick="goToPage('${page}')">${label} →</button>`; }
-const ICO_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg>';
 
-function dashBlocks(){
-  const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
-  const trend = dashTrend();
+function dashData(){
+  const T = computeTotals();
   const meseCorrente = meseKeyFromDate(new Date());
   const delMese = db.movimenti.filter(m=>(m.date||'').slice(0,7)===meseCorrente && !m.rettifica);
   const uscite = delMese.filter(m=>m.type==='uscita').reduce((s,m)=>s+Number(m.amount),0);
@@ -607,42 +618,41 @@ function dashBlocks(){
   const perCat = {};
   delMese.filter(m=>m.type==='uscita').forEach(m=>{ const k=m.category||'altro'; perCat[k]=(perCat[k]||0)+Number(m.amount); });
   const topCat = CATEGORIE.filter(c=>perCat[c.key]).sort((a,b)=>perCat[b.key]-perCat[a.key]).slice(0,4);
-  const maxCat = topCat.length ? Math.max(...topCat.map(c=>Math.max(perCat[c.key], db.budget[c.key]||0))) : 1;
-
-  const eventi = [...db.preventivati].sort((a,b)=>(a.date||'2100').localeCompare(b.date||'2100')).slice(0,4);
+  const prevSeguire = db.preventivati.filter(p=>!isPrevAuto(p) && ['accettato','inviato'].includes(p.stato))
+    .sort((a,b)=> (prevInRitardo(b)-prevInRitardo(a)) || (a.date||'2100').localeCompare(b.date||'2100')).slice(0,4);
   const tasks = db.tasks.filter(t=>!t.done).sort((a,b)=>(a.dueDate||'2100').localeCompare(b.dueDate||'2100')).slice(0,5);
   const recenti = db.movimenti.map((m,i)=>({m,i})).sort((a,b)=>{ const c=(b.m.date||'').localeCompare(a.m.date||''); return c!==0?c:b.i-a.i; }).slice(0,5).map(x=>x.m);
-  const fisseMese = db.fisse.reduce((s,a)=> s + (a.frequency==='annuale' ? a.amount/12 : a.amount), 0);
-  const acquistiPending = db.acquisti.filter(a=>!a.bought);
+  return { ...T, trend:dashTrend(), meseCorrente, uscite, entrate, perCat, topCat, prevSeguire, tasks, recenti };
+}
 
-  const trendHtml = trend
-    ? `<span class="dash-trend ${trend.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trend.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${trend.abs>=0?'+':'−'}${euro(Math.abs(trend.abs))}${trend.pct!==null?` · ${Math.abs(trend.pct).toFixed(1)}%`:''} in 30 giorni</span>`
+function dashBlocks(D){
+  const maxCat = D.topCat.length ? Math.max(...D.topCat.map(c=>Math.max(D.perCat[c.key], db.budget[c.key]||0))) : 1;
+  const trendHtml = D.trend
+    ? `<span class="dash-trend ${D.trend.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${D.trend.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${D.trend.abs>=0?'+':'−'}${euro(Math.abs(D.trend.abs))}${D.trend.pct!==null?` · ${Math.abs(D.trend.pct).toFixed(1)}%`:''} in 30 giorni</span>`
     : `<span class="dash-trend flat">L'andamento compare dopo qualche giorno di utilizzo</span>`;
+  const accettati = db.preventivati.filter(p=>!isPrevAuto(p) && p.stato==='accettato').length;
 
-  const hero = (withChart)=>`
+  const hero = `
     <div class="card dash-card dash-hero">
       <div class="dash-hero-top">
-        <div>
-          <div class="dash-hero-label">Saldo sui conti</div>
-          <div class="dash-hero-amount">${euro(totalConti)}</div>
-        </div>
+        <div><div class="dash-hero-label">Saldo sui conti</div><div class="dash-hero-amount">${euro(D.totalConti)}</div></div>
         ${trendHtml}
       </div>
-      ${withChart ? `<div class="dash-hero-chart"><canvas id="chart-trend"></canvas></div>` : ''}
+      <div class="dash-hero-chart"><canvas id="chart-trend"></canvas></div>
       <div class="dash-hero-stats">
         <button class="dash-hero-stat" onclick="goToPage('preventivati')">
-          <div class="dash-hero-stat-label"><i style="background:var(--blue)"></i>Da incassare</div>
-          <div class="dash-hero-stat-value" style="color:var(--blue)">${euro(totalPrev)}</div>
-          <div class="dash-hero-stat-hint">${plur(db.preventivati.length,"evento","eventi")}</div>
+          <div class="dash-hero-stat-label"><i style="background:var(--blue)"></i>Preventivato</div>
+          <div class="dash-hero-stat-value" style="color:var(--blue)">${euro(D.totalPrev)}</div>
+          <div class="dash-hero-stat-hint">${plur(accettati,'preventivo accettato','preventivi accettati')}</div>
         </button>
         <button class="dash-hero-stat" onclick="goToPage('mancanti')">
           <div class="dash-hero-stat-label"><i style="background:var(--coral)"></i>Mancanti</div>
-          <div class="dash-hero-stat-value" style="color:var(--coral)">${euro(totalMancanti)}</div>
-          <div class="dash-hero-stat-hint">${plur(db.mancanti.length,"voce","voci")} in attesa</div>
+          <div class="dash-hero-stat-value" style="color:var(--coral)">${euro(D.totalMancanti)}</div>
+          <div class="dash-hero-stat-hint">in ritardo o da recuperare</div>
         </button>
         <div class="dash-hero-stat" style="cursor:default;">
           <div class="dash-hero-stat-label"><i style="background:var(--text)"></i>Totale previsto</div>
-          <div class="dash-hero-stat-value">${euro(totaleGenerale)}</div>
+          <div class="dash-hero-stat-value">${euro(D.totaleGenerale)}</div>
           <div class="dash-hero-stat-hint">conti + in arrivo</div>
         </div>
       </div>
@@ -650,14 +660,14 @@ function dashBlocks(){
 
   const mese = `
     <div class="card dash-card">
-      <div class="dash-card-head"><div class="dash-card-title">${fmtMese(meseCorrente)}</div>${dashLink('Spese','spese')}</div>
+      <div class="dash-card-head"><div class="dash-card-title">${fmtMese(D.meseCorrente)}</div>${dashLink('Spese','spese')}</div>
       <div class="month-stats">
-        <div class="month-stat"><div class="month-stat-label">Uscite</div><div class="month-stat-value" style="color:var(--coral)">${euro(uscite)}</div></div>
-        <div class="month-stat"><div class="month-stat-label">Entrate</div><div class="month-stat-value" style="color:var(--mint)">${euro(entrate)}</div></div>
-        <div class="month-stat"><div class="month-stat-label">Netto</div><div class="month-stat-value" style="color:${entrate-uscite>=0?'var(--text)':'var(--coral)'}">${euro(entrate-uscite)}</div></div>
+        <div class="month-stat"><div class="month-stat-label">Uscite</div><div class="month-stat-value" style="color:var(--coral)">${euro(D.uscite)}</div></div>
+        <div class="month-stat"><div class="month-stat-label">Entrate</div><div class="month-stat-value" style="color:var(--mint)">${euro(D.entrate)}</div></div>
+        <div class="month-stat"><div class="month-stat-label">Netto</div><div class="month-stat-value" style="color:${D.entrate-D.uscite>=0?'var(--text)':'var(--coral)'}">${euro(D.entrate-D.uscite)}</div></div>
       </div>
-      ${topCat.length ? `<div class="mini-list">${topCat.map(c=>{
-        const lim = db.budget[c.key]||0, sp = perCat[c.key], over = lim && sp>lim;
+      ${D.topCat.length ? `<div class="mini-list">${D.topCat.map(c=>{
+        const lim = db.budget[c.key]||0, sp = D.perCat[c.key], over = lim && sp>lim;
         return `<div class="mini-row" style="display:block;">
           <div style="display:flex; justify-content:space-between; gap:10px; font-size:12.5px;">
             <span style="font-weight:600;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${c.color}; margin-right:7px;"></span>${esc(c.label)}</span>
@@ -668,34 +678,34 @@ function dashBlocks(){
       : `<div class="empty-mini">Nessuna spesa questo mese. <button onclick="modalMovimento(null,'uscita')">Registrane una</button></div>`}
     </div>`;
 
-  const eventiHtml = `
+  const preventivi = `
     <div class="card dash-card">
-      <div class="dash-card-head"><div class="dash-card-title">Prossimi eventi <span class="count">${db.preventivati.length}</span></div>${dashLink('Tutti','preventivati')}</div>
-      ${eventi.length ? `<div class="mini-list">${eventi.map(p=>{
-        const st = prevStats(p), ts = prevTaskStats(p.id);
-        const d = p.date ? daysUntil(p.date) : null, urg = d!==null && d>=0 && d<=3;
+      <div class="dash-card-head"><div class="dash-card-title">Preventivi da seguire <span class="count">${D.prevSeguire.length}</span></div>${dashLink('Tutti','preventivati')}</div>
+      ${D.prevSeguire.length ? `<div class="mini-list">${D.prevSeguire.map(p=>{
+        const st = prevStats(p), ts = prevTaskStats(p.id), rit = prevInRitardo(p);
         return `<div class="mini-row clickable" onclick="openPrevDrawer('${p.id}')">
-          <div class="mini-dot" style="background:${p.color}22; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
+          <div class="mini-dot" style="background:${p.color}22; color:${p.color};">${esc((p.cliente||p.name).charAt(0).toUpperCase())}</div>
           <div class="mini-main">
             <div class="mini-title">${esc(p.name)}</div>
-            <div class="mini-sub" style="${urg?'color:var(--amber)':''}">${quandoTesto(p.date)}${st.n?` · ${st.fatte}/${st.n} voci`:''}${ts.n?` · ${ts.fatte}/${ts.n} task`:''}</div>
+            <div class="mini-sub">${p.stato==='inviato'?'<span style="color:var(--blue)">In attesa di risposta</span>':rit?'<span style="color:var(--coral)">Pagamento in ritardo</span>':quandoTesto(p.date)}${p.cliente?' · '+esc(p.cliente):''}${ts.n?` · ${ts.fatte}/${ts.n} lavori`:''}</div>
           </div>
-          <div class="mini-amount" style="color:var(--blue)">${euro(p.amount)}</div>
+          <div class="mini-amount" style="color:${p.stato==='inviato'?'var(--text-dim)':rit?'var(--coral)':'var(--blue)'}">${euro(p.stato==='inviato'?st.totale:st.residuo)}</div>
         </div>`;}).join('')}</div>`
-      : `<div class="empty-mini">Nessun evento in programma. <button onclick="modalPreventivato()">Crea un evento</button></div>`}
+      : `<div class="empty-mini">Nessun preventivo in corso. <button onclick="modalPreventivato()">Crea un preventivo</button></div>`}
     </div>`;
 
-  const taskHtml = `
+  const task = `
     <div class="card dash-card">
       <div class="dash-card-head"><div class="dash-card-title">Da fare <span class="count">${db.tasks.filter(t=>!t.done).length}</span></div>${dashLink('Tutte','task')}</div>
-      ${tasks.length ? `<div class="mini-list">${tasks.map(t=>{
+      ${D.tasks.length ? `<div class="mini-list">${D.tasks.map(t=>{
         const ev = t.prevId ? db.preventivati.find(p=>p.id===t.prevId) : null;
         const over = t.dueDate && daysUntil(t.dueDate)<0;
+        const subs = t.subtasks||[], sf = subs.filter(s=>s.done).length;
         return `<div class="mini-row">
           <button class="mini-check" title="Completa" onclick="toggleTaskEvento('${t.id}')">${ICO_CHECK}</button>
           <div class="mini-main" style="cursor:pointer;" onclick="${ev?`openPrevDrawer('${ev.id}')`:`modalTask('${t.id}')`}">
             <div class="mini-title">${esc(t.text)}</div>
-            <div class="mini-sub">${ev?`<span style="color:var(--blue)">${esc(ev.name)}</span>`:'Generale'}${t.dueDate?` · <span style="${over?'color:var(--coral)':''}">${over?'scaduta ':''}${fmtDate(t.dueDate)}</span>`:''}</div>
+            <div class="mini-sub">${ev?`<span style="color:var(--blue)">${esc(ev.name)}</span>`:'Generale'}${subs.length?` · ${sf}/${subs.length}`:''}${t.dueDate?` · <span style="${over?'color:var(--coral)':''}">${over?'scaduta ':''}${fmtDate(t.dueDate)}</span>`:''}</div>
           </div>
           ${t.priority==='Alta'?`<span class="pill" style="background:var(--coral-dim); color:var(--coral);">Alta</span>`:''}
         </div>`;}).join('')}</div>`
@@ -706,11 +716,11 @@ function dashBlocks(){
       </div>
     </div>`;
 
-  const contiHtml = `
+  const conti = `
     <div class="card dash-card">
       <div class="dash-card-head"><div class="dash-card-title">Conti <span class="count">${db.accounts.length}</span></div>${dashLink('Gestisci','conti')}</div>
       ${db.accounts.length ? `<div class="mini-list">${db.accounts.map(a=>{
-        const pct = totalConti>0 ? Math.max(0, Number(a.balance)/totalConti*100) : 0;
+        const pct = D.totalConti>0 ? Math.max(0, Number(a.balance)/D.totalConti*100) : 0;
         return `<div class="mini-row" style="display:block;">
           <div style="display:flex; align-items:center; gap:10px;">
             <div class="mini-dot" style="width:30px; height:30px; background:${a.color}22; color:${a.color}; font-size:11px;">${esc(a.icon||a.name.slice(0,2))}</div>
@@ -722,69 +732,53 @@ function dashBlocks(){
       : `<div class="empty-mini">Nessun conto. <button onclick="modalAccount()">Aggiungi il primo</button></div>`}
     </div>`;
 
-  const obiettiviHtml = `
-    <div class="card dash-card">
-      <div class="dash-card-head"><div class="dash-card-title">Obiettivi <span class="count">${db.obiettivi.length}</span></div>${dashLink('Tutti','obiettivi')}</div>
-      ${db.obiettivi.length ? `<div class="mini-list">${db.obiettivi.slice(0,4).map(o=>{
-        const pct = Math.min(100, (o.current/o.target*100)||0);
-        return `<div class="mini-row" style="display:block; cursor:pointer;" onclick="modalContributoObiettivo('${o.id}')">
-          <div style="display:flex; justify-content:space-between; gap:10px;">
-            <span class="mini-title">${esc(o.name)}</span>
-            <span class="mini-amount" style="font-size:12.5px;">${euro(o.current)} <span style="color:var(--text-faint); font-weight:500;">/ ${euro(o.target)}</span></span>
-          </div>
-          <div class="mini-bar" style="height:6px;"><div style="width:${pct}%; background:${o.color};"></div></div>
-        </div>`;}).join('')}</div>`
-      : `<div class="empty-mini">Nessun obiettivo. <button onclick="modalObiettivo()">Creane uno</button></div>`}
-    </div>`;
-
-  const movimentiHtml = `
+  const movimenti = `
     <div class="card dash-card">
       <div class="dash-card-head"><div class="dash-card-title">Ultimi movimenti</div>${dashLink('Tutti','spese')}</div>
-      ${recenti.length ? `<div class="mini-list">${recenti.map(m=>{
+      ${D.recenti.length ? `<div class="mini-list">${D.recenti.map(m=>{
         const tr = m.type==='trasferimento', us = m.type==='uscita';
         const acc = !tr ? db.accounts.find(a=>a.id===m.accountId) : null;
         const cat = !tr && m.category ? catInfo(m.category) : null;
         return `<div class="mini-row">
-          <div class="mini-dot" style="background:${tr?'var(--blue-dim)':us?'rgba(255,55,95,0.14)':'var(--mint-dim)'}; color:${tr?'var(--blue)':us?'#FF375F':'var(--mint)'};">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2">${tr?'<path d="M7 7h11M18 7l-4-4M18 7l-4 4M17 17H6M6 17l4 4M6 17l4-4"/>':us?'<path d="M12 5v14M19 12l-7 7-7-7"/>':'<path d="M12 19V5M5 12l7-7 7 7"/>'}</svg>
-          </div>
+          <div class="mini-dot" style="background:${tr?'var(--blue-dim)':us?'rgba(255,55,95,0.14)':'var(--mint-dim)'}; color:${tr?'var(--blue)':us?'#FF375F':'var(--mint)'};">${svgI(tr?'swap':us?'down':'up',14)}</div>
           <div class="mini-main"><div class="mini-title">${esc(m.name)}</div><div class="mini-sub">${fmtDate(m.date)}${acc?' · '+esc(acc.name):''}${cat?' · '+esc(cat.label):''}</div></div>
           <div class="mini-amount" style="color:${tr?'var(--blue)':us?'var(--coral)':'var(--mint)'}">${tr?'':us?'−':'+'} ${euro(m.amount)}</div>
         </div>`;}).join('')}</div>`
       : `<div class="empty-mini">Nessun movimento. <button onclick="modalMovimento(null,'uscita')">Registra il primo</button></div>`}
     </div>`;
 
-  const ricorrentiHtml = `
+  const fisseMese = db.fisse.reduce((s,a)=> s + (a.frequency==='annuale' ? a.amount/12 : a.amount), 0);
+  const acqPend = db.acquisti.filter(a=>!a.bought);
+  const ricorrenti = `
     <div class="card dash-card">
       <div class="dash-card-head"><div class="dash-card-title">Ricorrenti e acquisti</div></div>
       <div class="mini-list">
         <div class="mini-row clickable" onclick="goToPage('fisse')">
-          <div class="mini-dot" style="background:var(--amber-dim); color:var(--amber);">↻</div>
-          <div class="mini-main"><div class="mini-title">Spese fisse</div><div class="mini-sub">${plur(db.fisse.length,"voce ricorrente","voci ricorrenti")}</div></div>
+          <div class="mini-dot" style="background:var(--amber-dim); color:var(--amber);">${svgI('repeat',14)}</div>
+          <div class="mini-main"><div class="mini-title">Spese fisse</div><div class="mini-sub">${plur(db.fisse.length,'voce ricorrente','voci ricorrenti')}</div></div>
           <div class="mini-amount" style="color:var(--amber)">${euro(fisseMese)}<span style="color:var(--text-faint); font-weight:500; font-size:11px;">/mese</span></div>
         </div>
         <div class="mini-row clickable" onclick="goToPage('acquisti')">
-          <div class="mini-dot" style="background:rgba(79,209,232,0.14); color:#4FD1E8;">🛒</div>
-          <div class="mini-main"><div class="mini-title">Lista acquisti</div><div class="mini-sub">${acquistiPending.length} da comprare</div></div>
-          <div class="mini-amount">${euro(acquistiPending.reduce((s,a)=>s+Number(a.price||0)*Number(a.qty||1),0))}</div>
+          <div class="mini-dot" style="background:rgba(79,209,232,0.14); color:#4FD1E8;">${svgI('cart',14)}</div>
+          <div class="mini-main"><div class="mini-title">Lista acquisti</div><div class="mini-sub">${acqPend.length} da comprare</div></div>
+          <div class="mini-amount">${euro(acqPend.reduce((s,a)=>s+Number(a.price||0)*Number(a.qty||1),0))}</div>
         </div>
       </div>
     </div>`;
-
-  return { hero, mese, eventiHtml, taskHtml, contiHtml, obiettiviHtml, movimentiHtml, ricorrentiHtml, snaps:getSnapshots() };
+  return { hero, mese, preventivi, task, conti, movimenti, ricorrenti };
 }
 
 function aggiungiTaskDashboard(){
   const input = document.getElementById('dash-task-input');
-  const text = input ? input.value.trim() : '';
-  if(!text) return;
+  const text = input ? input.value.trim() : ''; if(!text) return;
   db.tasks.push({ id:uid(), text, note:'', priority:'', dueDate:'', done:false, subtasks:[], prevId:null, prevNome:'' });
   saveDB(); renderAll(); toast('Task aggiunta.');
   document.getElementById('dash-task-input')?.focus();
 }
 
 function renderDashboard(){
-  const B = dashBlocks();
+  const D = dashData();
+  const B = dashBlocks(D);
   const dashboardIsActivePage = document.getElementById('page-dashboard').classList.contains('active');
   const nome = session ? session.name : '';
   const oggiLungo = (d=>d.charAt(0).toUpperCase()+d.slice(1))(new Date().toLocaleDateString('it-IT',{ weekday:'long', day:'numeric', month:'long' }));
@@ -793,81 +787,100 @@ function renderDashboard(){
     document.getElementById('page-dashboard').innerHTML = '';
     const rootEl = document.getElementById('mobile-dash-root');
     if(!dashboardIsActivePage){ rootEl.innerHTML = ''; return; }
-    const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
-    const trend = dashTrend();
-    rootEl.innerHTML = `
-      <div class="mobile-dash-hero">
-        <div class="hero-balance-label">Ciao ${esc(nome)} · saldo sui conti</div>
-        <div class="hero-balance-amount">${euro(totalConti)}</div>
-        ${trend ? `<div class="hero-balance-trend ${trend.abs>=0?'up':'down'}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${trend.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>
-          ${trend.abs>=0?'+':'−'}${euro(Math.abs(trend.abs))} in 30 giorni
-        </div>` : ''}
-        <div class="hero-balance-actions">
-          <button class="hero-balance-btn primary" onclick="modalMovimento(null,'uscita')">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>Spesa
-          </button>
-          <button class="hero-balance-btn" onclick="modalMovimento(null,'entrata')">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Entrata
-          </button>
-        </div>
-        <div class="hero-stats-row">
-          <div class="hero-stat" onclick="goToPage('preventivati')"><div class="hero-stat-label">Da incassare</div><div class="hero-stat-value" style="color:var(--blue);">${euro(totalPrev)}</div></div>
-          <div class="hero-stat" onclick="goToPage('mancanti')"><div class="hero-stat-label">Mancanti</div><div class="hero-stat-value" style="color:#ff8fa8;">${euro(totalMancanti)}</div></div>
-          <div class="hero-stat"><div class="hero-stat-label">Totale</div><div class="hero-stat-value">${euro(totaleGenerale)}</div></div>
-        </div>
-      </div>
-      <div class="mobile-dash-sheet">
-        <div class="quick-actions mobile-quick">
-          ${ADD_ACTIONS.slice(2,10).map(a=>`<button class="qa-btn" onclick="${a.fn}"><span class="qa-icon" style="background:${a.bg}; color:${a.color};">+</span>${a.label}</button>`).join('')}
-        </div>
-        <div class="dash-grid">
-          ${B.eventiHtml}
-          ${B.taskHtml}
-          ${B.mese}
-          ${B.movimentiHtml}
-          ${B.contiHtml}
-          ${B.obiettiviHtml}
-          ${B.ricorrentiHtml}
-        </div>
-      </div>
-    `;
+    rootEl.innerHTML = mobileDashHtml(D, B, nome, oggiLungo);
     return;
   }
 
   document.getElementById('mobile-dash-root').innerHTML = '';
   document.getElementById('page-dashboard').innerHTML = `
     <div class="dash-head">
-      <div>
-        <div class="page-title">Ciao ${esc(nome)}</div>
-        <div class="page-sub">${oggiLungo}</div>
-      </div>
+      <div><div class="page-title">Ciao ${esc(nome)}</div><div class="page-sub">${oggiLungo}</div></div>
       <div class="dash-head-actions">
-        <button class="btn" onclick="modalMovimento(null,'entrata')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Entrata</button>
-        <button class="btn btn-primary" onclick="modalMovimento(null,'uscita')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>Spesa</button>
+        <button class="btn" onclick="modalMovimento(null,'entrata')">${svgI('up',14)}Entrata</button>
+        <button class="btn btn-primary" onclick="modalMovimento(null,'uscita')">${svgI('down',14)}Spesa</button>
         <div class="add-menu" id="add-menu">
-          <button class="btn" onclick="toggleAddMenu(event)">+ Aggiungi
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>
+          <button class="btn" onclick="toggleAddMenu(event)">+ Aggiungi <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>
           <div class="add-menu-pop" onclick="event.stopPropagation()">
-            ${ADD_ACTIONS.slice(2).map(a=>`<button onclick="document.getElementById('add-menu').classList.remove('open'); ${a.fn}"><span class="qa-icon" style="background:${a.bg}; color:${a.color};">+</span>${a.label}</button>`).join('')}
+            ${ADD_ACTIONS.slice(2).map(a=>`<button onclick="document.getElementById('add-menu').classList.remove('open'); ${a.fn}"><span class="qa-icon" style="background:${a.bg}; color:${a.color};">${svgI(a.ico,13)}</span>${a.label}</button>`).join('')}
           </div>
         </div>
       </div>
     </div>
-
     <div class="dash-grid">
-      <div class="span-8">${B.hero(true)}</div>
-      <div class="span-4">${B.contiHtml}</div>
-
-      <div class="span-4">${B.eventiHtml}</div>
-      <div class="span-4">${B.taskHtml}</div>
+      <div class="span-8">${B.hero}</div>
+      <div class="span-4">${B.conti}</div>
+      <div class="span-4">${B.preventivi}</div>
+      <div class="span-4">${B.task}</div>
       <div class="span-4">${B.mese}</div>
-
-      <div class="span-7">${B.movimentiHtml}</div>
-      <div class="span-5" style="display:flex; flex-direction:column; gap:16px;">${B.obiettiviHtml}${B.ricorrentiHtml}</div>
+      <div class="span-7">${B.movimenti}</div>
+      <div class="span-5">${B.ricorrenti}</div>
     </div>
   `;
-  drawTrendChart(B.snaps);
+  drawTrendChart(getSnapshots());
+}
+
+/* ---------- dashboard mobile: stile app bancaria ---------- */
+function mobileDashHtml(D, B, nome, oggiLungo){
+  const iniziale = (nome||'?').charAt(0).toUpperCase();
+  const tr = D.trend;
+  const prevAcc = db.preventivati.filter(p=>!isPrevAuto(p) && p.stato==='accettato');
+  return `
+    <div class="m-hero">
+      <div class="m-hero-top">
+        <button class="m-avatar" onclick="goToPage('account')">${esc(iniziale)}</button>
+        <div class="m-hello"><div>Ciao ${esc(nome)}</div><span>${oggiLungo}</span></div>
+        <button class="m-icon-btn" onclick="openSidebar()" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+      </div>
+      <div class="m-balance-label">Saldo sui conti</div>
+      <div class="m-balance">${euro(D.totalConti)}</div>
+      ${tr ? `<div class="hero-balance-trend ${tr.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${tr.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${tr.abs>=0?'+':'−'}${euro(Math.abs(tr.abs))} in 30 giorni</div>` : ''}
+      <div class="m-actions">
+        <button class="m-action primary" onclick="modalMovimento(null,'uscita')"><span>${svgI('down',18)}</span>Spesa</button>
+        <button class="m-action" onclick="modalMovimento(null,'entrata')"><span>${svgI('up',18)}</span>Entrata</button>
+        <button class="m-action" onclick="modalMovimento(null,'trasferimento')"><span>${svgI('swap',18)}</span>Sposta</button>
+        <button class="m-action" onclick="modalPreventivato()"><span>${svgI('doc',18)}</span>Preventivo</button>
+      </div>
+    </div>
+
+    <div class="m-sheet">
+      ${db.accounts.length ? `
+      <div class="m-section-head"><span>I tuoi conti</span><button class="dash-link" onclick="goToPage('conti')">Gestisci →</button></div>
+      <div class="m-cards">
+        ${db.accounts.map(a=>`
+          <button class="m-acc-card" style="--acc:${a.color}" onclick="modalAccount('${a.id}')">
+            <div class="m-acc-top"><span class="m-acc-chip">${esc(a.icon||a.name.slice(0,2))}</span><span class="m-acc-name">${esc(a.name)}</span></div>
+            <div class="m-acc-bal">${euro(a.balance)}</div>
+            <div class="m-acc-share">${D.totalConti>0?Math.round(Math.max(0,a.balance)/D.totalConti*100):0}% del totale</div>
+          </button>`).join('')}
+        <button class="m-acc-card add" onclick="modalAccount()"><span>+</span>Nuovo conto</button>
+      </div>` : `<button class="m-empty-cta" onclick="modalAccount()">+ Aggiungi il tuo primo conto</button>`}
+
+      <div class="m-stats">
+        <button class="m-stat" onclick="goToPage('preventivati')"><span>Da incassare</span><b style="color:var(--blue)">${euro(D.totalPrev)}</b><small>${plur(prevAcc.length,'preventivo','preventivi')}</small></button>
+        <button class="m-stat" onclick="goToPage('mancanti')"><span>Mancanti</span><b style="color:#ff8fa8">${euro(D.totalMancanti)}</b><small>da recuperare</small></button>
+        <button class="m-stat" onclick="goToPage('spese')"><span>Uscite mese</span><b>${euro(D.uscite)}</b><small>entrate ${euro(D.entrate)}</small></button>
+      </div>
+
+      <div class="card m-quick">
+        <div class="m-section-head" style="margin:0 0 12px;"><span>Azioni rapide</span></div>
+        <div class="m-quick-grid">
+          ${ADD_ACTIONS.slice(3).filter(a=>a.label!=='Trasferimento').concat([
+            {label:'Clienti', fn:"goToPage('clienti')", bg:'rgba(178,124,255,0.14)', color:'#B27CFF', ico:'users'},
+            {label:'Stipendio', fn:"goToPage('stipendio')", bg:'var(--mint-dim)', color:'var(--mint)', ico:'cash'},
+            {label:'Simulatore', fn:"goToPage('simulatore')", bg:'rgba(191,90,242,0.14)', color:'#BF5AF2', ico:'flask'}]).slice(0,8).map(a=>`
+            <button onclick="${a.fn}"><span style="background:${a.bg}; color:${a.color};">${svgI(a.ico,18)}</span>${a.label}</button>`).join('')}
+        </div>
+      </div>
+
+      <div class="m-blocks">
+        ${B.preventivi}
+        ${B.task}
+        ${B.mese}
+        ${B.movimenti}
+        ${B.ricorrenti}
+      </div>
+    </div>
+  `;
 }
 
 function drawTrendChart(snaps){
@@ -1339,7 +1352,7 @@ function checkPreventivatiScaduti(){
   let changed = false;
   const rimasti = [];
   db.preventivati.forEach(p=>{
-    if(p.date && p.date < oggiVal){
+    if(isPrevAuto(p) && p.date && p.date < oggiVal){
       const mancante = { id:uid(), name:p.name, amount:p.amount };
       if(p.fromStipendioId){
         mancante.fromStipendioId = p.fromStipendioId;
@@ -1578,75 +1591,233 @@ function deleteEccezione(stipendioId, id){
    (p.amount) diventa il RESIDUO ancora da incassare. Quando tutte le voci sono
    incassate il preventivato si chiude da solo.
 ============================================================================= */
-let prevDrawerId = null;      // evento aperto nel pannello di dettaglio
-let prevDraft = [];           // voci in modifica dentro il modal
+/* ==================== PREVENTIVI ====================
+   Ogni preventivo ha: numero progressivo, cliente, titolo, stato
+   (bozza → inviato → accettato → completato, oppure rifiutato), data del lavoro,
+   validità dell'offerta, voci (quantità × prezzo), sconto e note.
+   Le voci si incassano una alla volta; quando sono tutte incassate il preventivo
+   passa in archivio come "completato" (non viene cancellato, così le task restano collegate).
+   Contano nel KPI "Preventivato" solo i preventivi ACCETTATI non ancora incassati;
+   se la data del lavoro è passata e manca ancora qualcosa, quella cifra conta come "Mancante".
+======================================================== */
+const PREV_STATI = [
+  { key:'bozza',      label:'Bozza',      color:'#8E8E93' },
+  { key:'inviato',    label:'Inviato',    color:'#0A84FF' },
+  { key:'accettato',  label:'Accettato',  color:'#30D158' },
+  { key:'completato', label:'Completato', color:'#64D2FF' },
+  { key:'rifiutato',  label:'Rifiutato',  color:'#FF453A' },
+];
+const PREV_TABS = [
+  { key:'attivi', label:'Attivi', match:p=>['bozza','inviato','accettato'].includes(p.stato) },
+  { key:'bozza', label:'Bozze', match:p=>p.stato==='bozza' },
+  { key:'inviato', label:'Inviati', match:p=>p.stato==='inviato' },
+  { key:'accettato', label:'Accettati', match:p=>p.stato==='accettato' },
+  { key:'completato', label:'Completati', match:p=>p.stato==='completato' },
+  { key:'rifiutato', label:'Rifiutati', match:p=>p.stato==='rifiutato' },
+  { key:'tutti', label:'Tutti', match:()=>true },
+];
+let prevDrawerId = null;
+let prevDraft = [];
+let prevTab = 'attivi';
+let prevVoceFilter = '';
+const ICO_CHECK_SM = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg>';
+const ICO_GRIP = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg>';
+const ICO_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>';
 
+function statoInfo(k){ return PREV_STATI.find(s=>s.key===k) || PREV_STATI[2]; }
+function statoPill(k){ const s = statoInfo(k); return `<span class="pill" style="background:${s.color}22; color:${s.color};">${s.label}</span>`; }
+function isPrevAuto(p){ return !!p.fromStipendioId; }   // previsioni generate dalla sezione Stipendio
+function prossimoNumeroPrev(){
+  const anno = new Date().getFullYear();
+  const max = db.preventivati.reduce((m,p)=>{
+    const r = /^P-(\d{4})-(\d+)$/.exec(p.numero||'');
+    return r && Number(r[1])===anno ? Math.max(m, Number(r[2])) : m;
+  }, 0);
+  return `P-${anno}-${String(max+1).padStart(3,'0')}`;
+}
+// porta i preventivi creati con le versioni precedenti al nuovo formato
+function migratePrev(p){
+  if(!p.stato) p.stato = 'accettato';
+  if(!Array.isArray(p.voci) || !p.voci.length){
+    p.voci = [{ id:uid(), name: isPrevAuto(p) ? 'Stipendio' : 'Importo', qty:1, price:Number(p.amount)||0, amount:Number(p.amount)||0, done:false }];
+  }
+  p.voci.forEach(v=>{
+    if(v.qty===undefined) v.qty = 1;
+    if(v.price===undefined) v.price = Number(v.amount)||0;
+    v.amount = Math.round(Number(v.qty)*Number(v.price)*100)/100;
+  });
+  if(p.sconto===undefined) p.sconto = 0;
+  if(!p.numero && !isPrevAuto(p)) p.numero = prossimoNumeroPrev();
+  if(p.cliente===undefined) p.cliente = '';
+  recalcPrev(p);
+}
 function prevHasVoci(p){ return Array.isArray(p.voci) && p.voci.length>0; }
 function prevStats(p){
-  if(!prevHasVoci(p)) return { totale:Number(p.amount)||0, incassato:0, residuo:Number(p.amount)||0, n:0, fatte:0, pct:0 };
-  const totale = p.voci.reduce((s,v)=>s+Number(v.amount||0),0);
-  const incassato = p.voci.filter(v=>v.done).reduce((s,v)=>s+Number(v.amount||0),0);
-  const fatte = p.voci.filter(v=>v.done).length;
-  return { totale, incassato, residuo: totale-incassato, n:p.voci.length, fatte, pct: totale ? Math.round(incassato/totale*100) : Math.round(fatte/p.voci.length*100) };
+  const voci = p.voci||[];
+  const lordo = voci.reduce((s,v)=>s+Number(v.amount||0),0);
+  const totale = Math.max(0, lordo - Number(p.sconto||0));
+  const incassato = voci.filter(v=>v.done).reduce((s,v)=>s+Number(v.amount||0),0);
+  const fatte = voci.filter(v=>v.done).length;
+  const residuo = Math.max(0, Math.round((totale-incassato)*100)/100);
+  return { lordo, totale, incassato, residuo, n:voci.length, fatte, pct: totale ? Math.min(100, Math.round(incassato/totale*100)) : 0 };
 }
-function recalcPrev(p){ if(prevHasVoci(p)) p.amount = prevStats(p).residuo; }
+function recalcPrev(p){
+  const st = prevStats(p);
+  p.amount = p.stato==='accettato' ? st.residuo : 0;
+}
+function prevInRitardo(p){ return p.stato==='accettato' && p.amount>0 && p.date && p.date < oggiStr(); }
 function prevTasks(pid){ return db.tasks.filter(t=>t.prevId===pid); }
-function prevTaskStats(pid){ const l = prevTasks(pid); return { n:l.length, fatte:l.filter(t=>t.done).length }; }
-// quando un evento si chiude (incassato, scaduto o eliminato) le sue task restano,
-// scollegate, ma ricordano il nome dell'evento per non perdere il contesto
-function scollegaTaskEvento(pid){ db.tasks.forEach(t=>{ if(t.prevId===pid) t.prevId = null; }); }
+function prevTaskStats(pid){
+  const l = prevTasks(pid);
+  const subs = l.flatMap(t=>t.subtasks||[]);
+  return { n:l.length, fatte:l.filter(t=>t.done).length, subN:subs.length, subFatte:subs.filter(s=>s.done).length };
+}
+// quanti lavori (task + sottotask) sono collegati a una voce e quanti sono fatti
+function voceLavori(pid, vid){
+  let n=0, f=0;
+  prevTasks(pid).forEach(t=>{
+    if(t.voceId===vid){ n++; if(t.done) f++; }
+    (t.subtasks||[]).forEach(s=>{ if(s.voceId===vid){ n++; if(s.done) f++; } });
+  });
+  return { n, f };
+}
+function scollegaTaskEvento(pid){ db.tasks.forEach(t=>{ if(t.prevId===pid){ t.prevId = null; t.voceId = null; (t.subtasks||[]).forEach(s=>s.voceId=null); } }); }
 function quandoTesto(date){
   if(!date) return 'Senza data';
   const d = daysUntil(date);
-  return d===0 ? 'Oggi' : d===1 ? 'Domani' : d<0 ? 'Passato' : d<=14 ? `Tra ${d} giorni` : fmtDate(date);
+  return d===0 ? 'Oggi' : d===1 ? 'Domani' : d<0 ? `${-d} giorn${d===-1?'o':'i'} fa` : d<=14 ? `Tra ${d} giorni` : fmtDate(date);
+}
+function validitaTesto(p){
+  if(!p.validoFino || !['bozza','inviato'].includes(p.stato)) return '';
+  const d = daysUntil(p.validoFino);
+  if(d<0) return `<span style="color:var(--coral)">Offerta scaduta</span>`;
+  return `<span style="color:${d<=3?'var(--amber)':'inherit'}">Valido ${d===0?'fino a oggi':'ancora '+d+' g'}</span>`;
 }
 
+/* ---------- riordino generico con trascinamento (mouse e touch) ---------- */
+function moveInArray(arr, id, beforeId){
+  const i = arr.findIndex(x=>x.id===id); if(i<0) return;
+  const [m] = arr.splice(i,1);
+  if(beforeId){ let j = arr.findIndex(x=>x.id===beforeId); if(j<0) j = arr.length; arr.splice(j,0,m); }
+  else arr.push(m);
+}
+function attachSortable(container, itemSel, handleSel, onReorder){
+  if(!container) return;
+  container.querySelectorAll(`:scope > ${itemSel} ${handleSel}`).forEach(h=>{
+    if(h.closest(itemSel).parentElement!==container) return;
+    h.addEventListener('pointerdown', e=>{
+      e.preventDefault(); e.stopPropagation();
+      const el = h.closest(itemSel); const startY = e.clientY; let beforeId;
+      const sibs = ()=>Array.from(container.children).filter(x=>x!==el && x.matches(itemSel));
+      el.classList.add('dragging'); document.body.style.userSelect='none';
+      const move = ev=>{
+        el.style.transform = `translateY(${ev.clientY-startY}px)`; el.style.zIndex = 5;
+        const s = sibs(); s.forEach(x=>x.classList.remove('drag-over-top','drag-over-bottom'));
+        const target = s.find(x=>{ const r=x.getBoundingClientRect(); return ev.clientY < r.top + r.height/2; });
+        if(target){ target.classList.add('drag-over-top'); beforeId = target.dataset.id; }
+        else { beforeId = null; s.length && s[s.length-1].classList.add('drag-over-bottom'); }
+      };
+      const up = ()=>{
+        document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+        document.body.style.userSelect=''; el.classList.remove('dragging'); el.style.transform=''; el.style.zIndex='';
+        sibs().forEach(x=>x.classList.remove('drag-over-top','drag-over-bottom'));
+        if(beforeId!==undefined && beforeId!==el.dataset.id) onReorder(el.dataset.id, beforeId);
+      };
+      document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+    });
+  });
+}
+
+/* ---------- pagina Preventivi ---------- */
+function setPrevTab(k){ prevTab = k; renderPreventivati(); }
 function renderPreventivati(){
   const f = filters.preventivati;
-  const total = db.preventivati.reduce((s,p)=>s+Number(p.amount),0);
-  let sorted = [...db.preventivati].sort((a,b)=> (a.date||'2100-01-01').localeCompare(b.date||'2100-01-01'));
-  if(f.q) sorted = sorted.filter(p=> matches(p.name,f.q) || matches(p.note,f.q) || (p.voci||[]).some(v=>matches(v.name,f.q)));
+  const tutti = db.preventivati.filter(p=>!isPrevAuto(p));
+  const auto = db.preventivati.filter(isPrevAuto);
+  const tab = PREV_TABS.find(t=>t.key===prevTab) || PREV_TABS[0];
+  let list = tutti.filter(tab.match);
+  if(f.q) list = list.filter(p=> matches(p.name,f.q) || matches(p.cliente,f.q) || matches(p.numero,f.q) || matches(p.note,f.q) || p.voci.some(v=>matches(v.name,f.q)));
+  const ordineStato = { inviato:0, bozza:1, accettato:2, completato:3, rifiutato:4 };
+  list.sort((a,b)=> prevTab==='attivi' ? (a.date||'2100').localeCompare(b.date||'2100') : (b.creato||b.date||'').localeCompare(a.creato||a.date||''));
+
+  const trattativa = tutti.filter(p=>['bozza','inviato'].includes(p.stato));
+  const valTratt = trattativa.reduce((s,p)=>s+prevStats(p).totale,0);
+  const accettati = tutti.filter(p=>p.stato==='accettato');
+  const daIncassare = accettati.reduce((s,p)=>s+p.amount,0);
+  const anno = String(new Date().getFullYear());
+  const incAnno = db.movimenti.filter(m=>m.fromPrev && (m.date||'').startsWith(anno)).reduce((s,m)=>s+Number(m.amount),0);
+  const decisi = tutti.filter(p=>['accettato','completato','rifiutato'].includes(p.stato));
+  const tasso = decisi.length ? Math.round(decisi.filter(p=>p.stato!=='rifiutato').length/decisi.length*100) : null;
+
   document.getElementById('page-preventivati').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Eventi</div><div class="page-sub">${db.preventivati.length} in corso · <strong style="color:var(--text);">${euro(total)}</strong> da incassare</div></div>
-      <div class="topbar-actions"><button class="btn btn-primary" onclick="modalPreventivato()">+ Nuovo evento</button></div>
+      <div><div class="page-title">Preventivi</div><div class="page-sub">${tutti.length} preventivi · ${accettati.length} accettati da incassare</div></div>
+      <div class="topbar-actions"><button class="btn btn-primary" onclick="modalPreventivato()">+ Nuovo preventivo</button></div>
+    </div>
+
+    <div class="grid grid-4" style="margin-bottom:20px;">
+      <div class="card"><div class="card-title">In trattativa</div><div class="stat-value" style="font-size:20px;">${euro(valTratt)}</div><div class="stat-trend" style="color:var(--text-faint)">${plur(trattativa.length,'bozza o inviato','tra bozze e inviati')}</div></div>
+      <div class="card"><div class="card-title">Accettati da incassare</div><div class="stat-value" style="font-size:20px; color:var(--blue);">${euro(daIncassare)}</div><div class="stat-trend" style="color:var(--text-faint)">${plur(accettati.length,'preventivo','preventivi')}</div></div>
+      <div class="card"><div class="card-title">Incassato nel ${anno}</div><div class="stat-value" style="font-size:20px; color:var(--mint);">${euro(incAnno)}</div><div class="stat-trend" style="color:var(--text-faint)">dalle voci dei preventivi</div></div>
+      <div class="card"><div class="card-title">Tasso di accettazione</div><div class="stat-value" style="font-size:20px;">${tasso===null?'—':tasso+'%'}</div><div class="stat-trend" style="color:var(--text-faint)">${decisi.length ? `su ${plur(decisi.length,'preventivo deciso','preventivi decisi')}` : 'nessuna risposta ancora'}</div></div>
+    </div>
+
+    <div class="prev-tabs">
+      ${PREV_TABS.map(t=>{ const n = tutti.filter(t.match).length; return `<button class="prev-tab ${prevTab===t.key?'active':''}" onclick="setPrevTab('${t.key}')">${t.label}${n?`<span>${n}</span>`:''}</button>`; }).join('')}
     </div>
     <div class="toolbar-row">
       ${vistaToggle('preventivati')}
-      ${calendarState.preventivati.on ? '' : searchBar('preventivati','Cerca evento o voce...')}
+      ${calendarState.preventivati.on ? '' : searchBar('preventivati','Cerca per cliente, numero, voce…')}
     </div>
     ${calendarState.preventivati.on ? renderCalendarGrid('preventivati') : `
     <div class="event-grid">
-      ${sorted.length ? sorted.map(p=>prevCardHtml(p)).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState(db.preventivati.length ? 'Nessun evento corrisponde alla ricerca.' : 'Nessun evento. Crealo, dividilo in voci e collega le task da fare.')}</div>`}
+      ${list.length ? list.map(prevCardHtml).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState(tutti.length ? 'Nessun preventivo in questa vista.' : 'Nessun preventivo. Creane uno: voci, sconto, stato e lavori da fare in un solo posto.')}</div>`}
     </div>
+    ${auto.length && ['attivi','tutti'].includes(prevTab) ? `
+      <div class="section-title">Previsioni automatiche <span class="count">dalla sezione Stipendio</span></div>
+      <div class="list">${auto.map(p=>`
+        <div class="row-item">
+          <div class="row-icon" style="background:var(--blue-dim); color:var(--blue);">€</div>
+          <div class="row-main"><div class="row-title">${esc(p.name)}</div><div class="row-sub">${fmtDate(p.date)} · ${quandoTesto(p.date)}</div></div>
+          <div class="row-amount" style="color:var(--blue)">${euro(p.amount)}</div>
+          <div class="row-actions"><button class="icon-btn" style="color:var(--mint)" title="Segna come incassato" onclick="convertToAccount('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg></button></div>
+        </div>`).join('')}</div>` : ''}
     `}
   `;
 }
 function prevCardHtml(p){
   const st = prevStats(p);
   const ts = prevTaskStats(p.id);
-  const d = p.date ? daysUntil(p.date) : null;
-  const urgente = d!==null && d>=0 && d<=3;
-  return `<button class="event-card ${urgente?'urgent':''}" onclick="openPrevDrawer('${p.id}')">
+  const ritardo = prevInRitardo(p);
+  const s = statoInfo(p.stato);
+  return `<button class="event-card ${ritardo?'urgent':''}" onclick="openPrevDrawer('${p.id}')" style="--stato:${s.color}">
     <div class="event-card-top">
-      <div class="event-avatar" style="background:${p.color}1f; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
+      <div class="event-avatar" style="background:${p.color}22; color:${p.color};">${esc((p.cliente||p.name).charAt(0).toUpperCase())}</div>
       <div class="event-card-titles">
         <div class="event-card-name">${esc(p.name)}</div>
-        <div class="event-card-date">${p.date?fmtDate(p.date)+' · ':''}${quandoTesto(p.date)}</div>
+        <div class="event-card-date">${p.numero?esc(p.numero)+' · ':''}${esc(p.cliente||'Nessun cliente')}</div>
       </div>
-      ${urgente ? `<span class="pill" style="background:var(--amber-dim); color:var(--amber);">a breve</span>` : ''}
+      ${statoPill(p.stato)}
     </div>
-    <div class="event-card-amount">${euro(p.amount)}<span>${st.n ? `di ${euro(st.totale)}` : 'da incassare'}</span></div>
-    ${st.n ? `<div class="progress-track slim"><div class="progress-fill" style="width:${st.pct}%; background:var(--mint);"></div></div>` : ''}
+    <div class="event-card-amount" style="color:${p.stato==='accettato'?'var(--blue)':p.stato==='rifiutato'?'var(--text-faint)':'var(--text)'}">
+      ${euro(p.stato==='accettato' ? st.residuo : st.totale)}<span>${p.stato==='accettato' ? (st.incassato?`da incassare su ${euro(st.totale)}`:'da incassare') : p.stato==='completato' ? 'incassato' : 'totale'}</span>
+    </div>
+    ${p.stato==='accettato' && st.incassato ? `<div class="progress-track slim"><div class="progress-fill" style="width:${st.pct}%; background:var(--mint);"></div></div>` : ''}
     <div class="event-card-meta">
-      <span class="meta-chip ${st.n && st.fatte===st.n?'ok':''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>${st.n ? `${st.fatte}/${st.n} voci` : 'Importo unico'}</span>
-      <span class="meta-chip ${ts.n && ts.fatte===ts.n?'ok':''}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>${ts.n ? `${ts.fatte}/${ts.n} task` : 'Nessuna task'}</span>
+      <span class="meta-chip">${p.date ? (Math.abs(daysUntil(p.date))<=14 ? `${fmtDate(p.date)} · ${quandoTesto(p.date)}` : fmtDate(p.date)) : 'Senza data'}</span>
+      ${ritardo ? `<span class="meta-chip" style="background:var(--coral-dim); color:var(--coral);">In ritardo</span>` : ''}
+      <span class="meta-chip ${st.n && st.fatte===st.n?'ok':''}">${st.fatte}/${st.n} incassat${st.n===1?'a':'e'}</span>
+      ${ts.n ? `<span class="meta-chip ${ts.fatte===ts.n?'ok':''}">${ts.fatte}/${ts.n} lavori</span>` : ''}
+      ${validitaTesto(p) ? `<span class="meta-chip">${validitaTesto(p)}</span>` : ''}
     </div>
   </button>`;
 }
 
-/* ---------- pannello di dettaglio evento (laterale su desktop, dal basso su mobile) ---------- */
+/* ---------- pannello di dettaglio preventivo ---------- */
 function openPrevDrawer(id){
+  const p = db.preventivati.find(x=>x.id===id);
+  if(p && isPrevAuto(p)) return convertToAccount(id);
+  if(prevDrawerId!==id) prevVoceFilter = '';
   prevDrawerId = id;
   renderPrevDrawer();
   document.getElementById('drawer-overlay').classList.add('active');
@@ -1655,43 +1826,77 @@ function closePrevDrawer(){
   prevDrawerId = null;
   document.getElementById('drawer-overlay').classList.remove('active');
 }
+function setPrevStato(id, stato){
+  const p = db.preventivati.find(x=>x.id===id); if(!p) return;
+  p.stato = stato;
+  if(stato==='inviato' && !p.inviatoIl) p.inviatoIl = oggiStr();
+  if(stato==='accettato' && !p.accettatoIl) p.accettatoIl = oggiStr();
+  recalcPrev(p); saveDB(); renderAll(); toast(`Preventivo ${statoInfo(stato).label.toLowerCase()}.`);
+}
+function voceSelectHtml(p, current, onchange, cls){
+  return `<select class="voce-select ${cls||''}" onclick="event.stopPropagation()" onchange="${onchange}" title="Collega a una voce del preventivo">
+    <option value="">Nessuna voce</option>
+    ${p.voci.map(v=>`<option value="${v.id}" ${current===v.id?'selected':''}>${esc(v.name)}</option>`).join('')}
+  </select>`;
+}
 function renderPrevDrawer(){
   if(!prevDrawerId) return;
   const p = db.preventivati.find(x=>x.id===prevDrawerId);
   if(!p){ closePrevDrawer(); return; }
   const st = prevStats(p);
-  const tasks = prevTasks(p.id);
   const ts = prevTaskStats(p.id);
+  const s = statoInfo(p.stato);
+  const fVoce = prevVoceFilter && p.voci.some(v=>v.id===prevVoceFilter) ? prevVoceFilter : '';
+  let tasks = prevTasks(p.id);
+  if(fVoce) tasks = tasks.filter(t=>t.voceId===fVoce || (t.subtasks||[]).some(x=>x.voceId===fVoce));
   const tasksLibere = db.tasks.filter(t=>!t.prevId && !t.done);
-  const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg>';
+  const passi = ['bozza','inviato','accettato','completato'];
+  const idxStato = passi.indexOf(p.stato);
 
   document.getElementById('drawer').innerHTML = `
     <div class="drawer-head">
-      <div class="event-avatar lg" style="background:${p.color}1f; color:${p.color};">${esc(p.name.charAt(0).toUpperCase())}</div>
+      <div class="event-avatar lg" style="background:${p.color}22; color:${p.color};">${esc((p.cliente||p.name).charAt(0).toUpperCase())}</div>
       <div style="flex:1; min-width:0;">
         <div class="drawer-title">${esc(p.name)}</div>
-        <div class="drawer-sub">${p.date?fmtDate(p.date)+' · ':''}${quandoTesto(p.date)}</div>
+        <div class="drawer-sub">${p.numero?esc(p.numero)+' · ':''}${p.cliente?`<a href="#" onclick="closePrevDrawer(); apriCliente('${esc(p.cliente).replace(/'/g,"\\'")}'); return false;" style="color:var(--text-dim);">${esc(p.cliente)}</a>`:'Nessun cliente'}</div>
       </div>
-      <button class="icon-btn" title="Chiudi" onclick="closePrevDrawer()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      <button class="icon-btn" title="Chiudi (Esc)" onclick="closePrevDrawer()">${ICO_X}</button>
+    </div>
+
+    <div class="stato-stepper">
+      ${passi.map((k,i)=>`<button class="stato-step ${p.stato==='rifiutato'?'':i<=idxStato?'done':''} ${p.stato===k?'current':''}" onclick="setPrevStato('${p.id}','${k}')"><i></i>${statoInfo(k).label}</button>`).join('')}
+      <button class="stato-step reject ${p.stato==='rifiutato'?'current':''}" onclick="setPrevStato('${p.id}','${p.stato==='rifiutato'?'bozza':'rifiutato'}')" title="${p.stato==='rifiutato'?'Riapri come bozza':'Segna come rifiutato'}">${p.stato==='rifiutato'?'Riapri':'Rifiutato'}</button>
     </div>
 
     <div class="drawer-hero">
-      <div class="drawer-hero-label">Da incassare</div>
-      <div class="drawer-hero-amount">${euro(p.amount)}</div>
-      ${st.n ? `
-        <div class="progress-track slim"><div class="progress-fill" style="width:${st.pct}%; background:var(--mint);"></div></div>
-        <div class="drawer-hero-sub">Incassato ${euro(st.incassato)} su ${euro(st.totale)} · ${st.pct}%</div>` : ''}
+      <div class="drawer-hero-grid">
+        <div><div class="drawer-hero-label">Totale</div><div class="drawer-hero-amount" style="color:var(--text)">${euro(st.totale)}</div></div>
+        <div><div class="drawer-hero-label">Incassato</div><div class="drawer-hero-mid" style="color:var(--mint)">${euro(st.incassato)}</div></div>
+        <div><div class="drawer-hero-label">Da incassare</div><div class="drawer-hero-mid" style="color:${prevInRitardo(p)?'var(--coral)':'var(--blue)'}">${euro(st.residuo)}</div></div>
+      </div>
+      <div class="progress-track slim"><div class="progress-fill" style="width:${st.pct}%; background:var(--mint);"></div></div>
+      <div class="drawer-hero-sub">
+        ${p.date?`Lavoro: <b>${fmtDate(p.date)}</b> (${quandoTesto(p.date).toLowerCase()})`:'Nessuna data lavoro'}
+        ${p.validoFino && ['bozza','inviato'].includes(p.stato) ? ` · ${validitaTesto(p)} (${fmtDate(p.validoFino)})` : ''}
+        ${prevInRitardo(p) ? ` · <span style="color:var(--coral)">pagamento in ritardo</span>` : ''}
+      </div>
     </div>
 
-    <div class="drawer-actions">
-      <button class="action-tile primary" onclick="convertToAccount('${p.id}')" ${p.amount>0?'':'disabled'}>
-        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span>${st.n?'Incassa resto':'Incassa'}
+    <div class="drawer-actions six">
+      <button class="action-tile primary" onclick="convertToAccount('${p.id}')" ${st.residuo>0 && p.stato!=='rifiutato'?'':'disabled'}>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span>Incassa resto
       </button>
       <button class="action-tile" onclick="modalPreventivato('${p.id}')">
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></span>Modifica
       </button>
-      <button class="action-tile" onclick="modalTask(null,'${p.id}')">
-        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>Nuova task
+      <button class="action-tile" onclick="stampaPreventivo('${p.id}')">
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg></span>Stampa / PDF
+      </button>
+      <button class="action-tile" onclick="copiaPreventivo('${p.id}')">
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></span>Copia testo
+      </button>
+      <button class="action-tile" onclick="duplicaPreventivo('${p.id}')">
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 4h10a2 2 0 012 2v10M4 8h10a2 2 0 012 2v10H6a2 2 0 01-2-2z"/></svg></span>Duplica
       </button>
       <button class="action-tile danger" onclick="modalEliminaPreventivato('${p.id}')">
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></span>Elimina
@@ -1699,32 +1904,42 @@ function renderPrevDrawer(){
     </div>
 
     <div class="drawer-section">
-      <div class="drawer-section-head"><span>Voci</span>${st.n?`<span class="count">${st.fatte}/${st.n}</span>`:''}</div>
-      ${st.n ? `<div class="sheet-list">
+      <div class="drawer-section-head"><span>Voci</span><span class="count">${st.fatte}/${st.n} incassate</span></div>
+      <div class="sheet-list">
         ${p.voci.map(v=>{
           const acc = v.accountId ? db.accounts.find(a=>a.id===v.accountId) : null;
+          const lav = voceLavori(p.id, v.id);
           return `<div class="voce-row ${v.done?'done':''}">
-            <button class="voce-check ${v.done?'checked':''}" ${v.done?'disabled title="Già incassata"':`title="Segna come incassata" onclick="modalIncassaVoce('${p.id}','${v.id}')"`}>${ICON_CHECK}</button>
-            <div class="voce-name"><span class="voce-label">${esc(v.name)}</span><small>${v.done ? `Incassata ${fmtDate(v.doneDate)}${acc?' su '+esc(acc.name):''}` : 'Tocca il cerchio quando la ricevi'}</small></div>
+            <button class="voce-check ${v.done?'checked':''}" ${v.done?'disabled title="Già incassata"':`title="Segna come incassata" onclick="modalIncassaVoce('${p.id}','${v.id}')"`} ${p.stato==='rifiutato'?'disabled':''}>${ICO_CHECK_SM}</button>
+            <div class="voce-name">
+              <span class="voce-label">${esc(v.name)}</span>
+              <small>${Number(v.qty)!==1?`${v.qty} × ${euro(v.price)} · `:''}${v.done ? `incassata ${fmtDate(v.doneDate)}${acc?' su '+esc(acc.name):''}` : 'da incassare'}</small>
+            </div>
+            ${lav.n ? `<button class="voce-lavori ${fVoce===v.id?'active':''} ${lav.f===lav.n?'ok':''}" onclick="filtraLavoriVoce('${v.id}')" title="Mostra i lavori di questa voce">${lav.f}/${lav.n} lavori</button>` : ''}
             <div class="voce-amount">${euro(v.amount)}</div>
           </div>`;
         }).join('')}
-      </div>` : `<div class="sheet-empty">Importo unico. <a href="#" onclick="modalPreventivato('${p.id}'); return false;">Dividilo in voci</a> (acconto, saldo, extra…) per incassarlo a rate.</div>`}
+        ${Number(p.sconto)>0 ? `<div class="voce-row total-row"><div class="voce-name">Sconto</div><div class="voce-amount" style="color:var(--coral)">− ${euro(p.sconto)}</div></div>` : ''}
+        <div class="voce-row total-row"><div class="voce-name"><b>Totale</b></div><div class="voce-amount"><b>${euro(st.totale)}</b></div></div>
+      </div>
     </div>
 
     <div class="drawer-section">
-      <div class="drawer-section-head"><span>Task</span>${ts.n?`<span class="count">${ts.fatte}/${ts.n}</span>`:''}</div>
-      <div class="sheet-list">
-        ${tasks.map(t=>`
-          <div class="voce-row ${t.done?'done':''}">
-            <button class="voce-check ${t.done?'checked':''}" title="${t.done?'Riapri':'Completa'}" onclick="toggleTaskEvento('${t.id}')">${ICON_CHECK}</button>
-            <div class="voce-name" style="cursor:pointer;" onclick="modalTask('${t.id}')"><span class="voce-label">${esc(t.text)}</span>${(t.dueDate||t.priority)?`<small>${t.priority?esc(t.priority):''}${t.priority&&t.dueDate?' · ':''}${t.dueDate?'entro '+fmtDate(t.dueDate):''}</small>`:''}</div>
-            <button class="icon-btn" title="Scollega dall'evento" onclick="scollegaTask('${t.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
-          </div>`).join('')}
-        <div class="sheet-add">
-          <input id="drawer-task-input" placeholder="Aggiungi una task per questo evento…" onkeydown="if(event.key==='Enter'){aggiungiTaskEvento('${p.id}')}">
-          <button onclick="aggiungiTaskEvento('${p.id}')">Aggiungi</button>
-        </div>
+      <div class="drawer-section-head">
+        <span>Lavori da fare</span>
+        <span class="count">${ts.fatte}/${ts.n} task${ts.subN?` · ${ts.subFatte}/${ts.subN} sottotask`:''}</span>
+      </div>
+      ${p.voci.length>1 ? `<div class="voce-filter">
+        <button class="${!fVoce?'active':''}" onclick="filtraLavoriVoce('')">Tutte le voci</button>
+        ${p.voci.map(v=>`<button class="${fVoce===v.id?'active':''}" onclick="filtraLavoriVoce('${v.id}')">${esc(v.name)}</button>`).join('')}
+      </div>` : ''}
+      <div class="lavori-list" id="lavori-list">
+        ${tasks.map(t=>lavoroHtml(p, t, fVoce)).join('') || `<div class="sheet-empty">${fVoce?'Nessun lavoro collegato a questa voce.':'Nessun lavoro ancora. Aggiungi qui sotto le cose da fare per questo preventivo.'}</div>`}
+      </div>
+      <div class="sheet-add standalone">
+        <input id="drawer-task-input" placeholder="Nuovo lavoro (es. Selezione foto)…" onkeydown="if(event.key==='Enter'){aggiungiTaskEvento('${p.id}')}">
+        ${voceSelectHtml(p, fVoce, '', 'compact" id="drawer-task-voce')}
+        <button onclick="aggiungiTaskEvento('${p.id}')">Aggiungi</button>
       </div>
       ${tasksLibere.length ? `
       <div class="sheet-link">
@@ -1733,20 +1948,68 @@ function renderPrevDrawer(){
       </div>` : ''}
     </div>
 
-    ${p.note ? `<div class="drawer-section"><div class="drawer-section-head"><span>Note</span></div><div class="sheet-empty" style="color:var(--text-dim);">${esc(p.note)}</div></div>` : ''}
+    ${p.note ? `<div class="drawer-section"><div class="drawer-section-head"><span>Note</span></div><div class="sheet-empty" style="color:var(--text-dim); white-space:pre-wrap;">${esc(p.note)}</div></div>` : ''}
+    <div class="drawer-foot">Creato ${p.creato?fmtDate(p.creato):'—'}${p.inviatoIl?` · inviato ${fmtDate(p.inviatoIl)}`:''}${p.accettatoIl?` · accettato ${fmtDate(p.accettatoIl)}`:''}${p.completatoIl?` · completato ${fmtDate(p.completatoIl)}`:''}</div>
   `;
+  // riordino: lavori nella lista e sottotask dentro ogni lavoro (disattivato quando si filtra per voce)
+  if(!fVoce){
+    attachSortable(document.getElementById('lavori-list'), '.lavoro', '.lavoro-head .drag-handle', (id, beforeId)=>{ moveInArray(db.tasks, id, beforeId); saveDB(); renderAll(); });
+  }
+  document.querySelectorAll('#lavori-list .sub-list').forEach(el=>{
+    if(fVoce) return;
+    const t = db.tasks.find(x=>x.id===el.dataset.task);
+    attachSortable(el, '.sub-row', '.drag-handle', (id, beforeId)=>{ moveInArray(t.subtasks, id, beforeId); saveDB(); renderAll(); });
+  });
 }
-function toggleTaskEvento(tid){
+function lavoroHtml(p, t, fVoce){
+  let subs = t.subtasks||[];
+  if(fVoce && t.voceId!==fVoce) subs = subs.filter(s=>s.voceId===fVoce);
+  const done = (t.subtasks||[]).filter(s=>s.done).length, tot = (t.subtasks||[]).length;
+  return `<div class="lavoro ${t.done?'done':''}" data-id="${t.id}">
+    <div class="lavoro-head">
+      ${fVoce?'':`<span class="drag-handle" title="Trascina per riordinare">${ICO_GRIP}</span>`}
+      <button class="voce-check ${t.done?'checked':''}" title="${t.done?'Riapri':'Completa'}" onclick="toggleTaskEvento('${t.id}')">${ICO_CHECK_SM}</button>
+      <div class="voce-name" style="cursor:pointer;" onclick="modalTask('${t.id}')">
+        <span class="voce-label">${esc(t.text)}</span>
+        ${(t.dueDate||t.priority||tot)?`<small>${[t.priority, t.dueDate?'entro '+fmtDate(t.dueDate):'', tot?`${done}/${tot} sottotask`:''].filter(Boolean).join(' · ')}</small>`:''}
+      </div>
+      ${voceSelectHtml(p, t.voceId||'', `setVoceTask('${t.id}', this.value)`, 'compact')}
+      <button class="icon-btn" title="Scollega dal preventivo" onclick="scollegaTask('${t.id}')">${ICO_X}</button>
+    </div>
+    <div class="sub-list" data-task="${t.id}">
+      ${subs.map(s=>`
+        <div class="sub-row ${s.done?'done':''}" data-id="${s.id}">
+          ${fVoce?'':`<span class="drag-handle" title="Trascina per riordinare">${ICO_GRIP}</span>`}
+          <input type="checkbox" class="subtask-check" ${s.done?'checked':''} onchange="toggleSubtaskPrev('${t.id}','${s.id}')">
+          <div class="sub-text">${esc(s.text)}</div>
+          ${voceSelectHtml(p, s.voceId||'', `setVoceSub('${t.id}','${s.id}', this.value)`, 'mini')}
+          <button class="subtask-del" title="Elimina sottotask" onclick="eliminaSubPrev('${t.id}','${s.id}')">${ICO_X}</button>
+        </div>`).join('')}
+    </div>
+    <div class="sub-add"><input id="sub-add-${t.id}" placeholder="+ Aggiungi sottotask" onkeydown="if(event.key==='Enter'){aggiungiSubPrev('${t.id}')}"></div>
+  </div>`;
+}
+function filtraLavoriVoce(vid){ prevVoceFilter = prevVoceFilter===vid ? '' : vid; renderPrevDrawer(); }
+function setVoceTask(tid, vid){ const t=db.tasks.find(x=>x.id===tid); if(!t) return; t.voceId = vid||null; saveDB(); renderAll(); }
+function setVoceSub(tid, sid, vid){ const t=db.tasks.find(x=>x.id===tid); const s=t&&(t.subtasks||[]).find(x=>x.id===sid); if(!s) return; s.voceId = vid||null; saveDB(); renderAll(); }
+function toggleSubtaskPrev(tid, sid){ const t=db.tasks.find(x=>x.id===tid); const s=t&&(t.subtasks||[]).find(x=>x.id===sid); if(!s) return; s.done=!s.done; saveDB(); renderAll(); }
+function eliminaSubPrev(tid, sid){ const t=db.tasks.find(x=>x.id===tid); if(!t) return; t.subtasks=(t.subtasks||[]).filter(x=>x.id!==sid); saveDB(); renderAll(); }
+function aggiungiSubPrev(tid){
+  const input = document.getElementById('sub-add-'+tid);
+  const text = input ? input.value.trim() : ''; if(!text) return;
   const t = db.tasks.find(x=>x.id===tid); if(!t) return;
-  t.done = !t.done;
+  if(!t.subtasks) t.subtasks=[];
+  t.subtasks.push({ id:uid(), text, done:false, voceId: prevVoceFilter || null });
   saveDB(); renderAll();
+  document.getElementById('sub-add-'+tid)?.focus();
 }
+function toggleTaskEvento(tid){ const t=db.tasks.find(x=>x.id===tid); if(!t) return; t.done=!t.done; saveDB(); renderAll(); }
 function aggiungiTaskEvento(pid){
   const input = document.getElementById('drawer-task-input');
-  const text = input ? input.value.trim() : '';
-  if(!text) return;
+  const text = input ? input.value.trim() : ''; if(!text) return;
   const p = db.preventivati.find(x=>x.id===pid);
-  db.tasks.push({ id:uid(), text, note:'', priority:'', dueDate: p&&p.date ? p.date : '', done:false, subtasks:[], prevId:pid, prevNome:p?p.name:'' });
+  const voceId = document.getElementById('drawer-task-voce')?.value || null;
+  db.tasks.push({ id:uid(), text, note:'', priority:'', dueDate: p&&p.date ? p.date : '', done:false, subtasks:[], prevId:pid, prevNome:p?p.name:'', voceId });
   saveDB(); renderAll();
   document.getElementById('drawer-task-input')?.focus();
 }
@@ -1755,20 +2018,90 @@ function collegaTaskEsistente(pid){
   const t = sel && db.tasks.find(x=>x.id===sel.value);
   const p = db.preventivati.find(x=>x.id===pid);
   if(!t || !p) return toast('Scegli una task.');
-  t.prevId = pid; t.prevNome = p.name;
+  t.prevId = pid; t.prevNome = p.name; t.voceId = null;
   saveDB(); renderAll(); toast('Task collegata.');
 }
 function scollegaTask(tid){
   const t = db.tasks.find(x=>x.id===tid); if(!t) return;
-  t.prevId = null; t.prevNome = '';
+  t.prevId = null; t.prevNome = ''; t.voceId = null; (t.subtasks||[]).forEach(s=>s.voceId=null);
   saveDB(); renderAll(); toast('Task scollegata: resta nella lista Task.');
 }
+
+/* ---------- strumenti: duplica, copia, stampa ---------- */
+function duplicaPreventivo(id){
+  const p = db.preventivati.find(x=>x.id===id); if(!p) return;
+  const nuovo = JSON.parse(JSON.stringify(p));
+  Object.assign(nuovo, { id:uid(), numero:prossimoNumeroPrev(), name:p.name+' (copia)', stato:'bozza', creato:oggiStr(), inviatoIl:null, accettatoIl:null, completatoIl:null });
+  const mappaVoci = {};
+  nuovo.voci.forEach(v=>{ const old=v.id; v.id=uid(); mappaVoci[old]=v.id; v.done=false; delete v.doneDate; delete v.accountId; });
+  recalcPrev(nuovo);
+  db.preventivati.push(nuovo);
+  // copia anche i lavori come checklist da rifare, già collegati alle voci corrispondenti
+  prevTasks(id).forEach(t=>{
+    db.tasks.push({ ...JSON.parse(JSON.stringify(t)), id:uid(), done:false, prevId:nuovo.id, prevNome:nuovo.name, voceId: t.voceId?mappaVoci[t.voceId]||null:null,
+      subtasks:(t.subtasks||[]).map(s=>({ ...s, id:uid(), done:false, voceId: s.voceId?mappaVoci[s.voceId]||null:null })) });
+  });
+  saveDB(); renderAll(); openPrevDrawer(nuovo.id); toast('Preventivo duplicato come bozza, con i suoi lavori.');
+}
+function testoPreventivo(p){
+  const st = prevStats(p);
+  const righe = p.voci.map(v=>`• ${v.name}${Number(v.qty)!==1?` (${v.qty} × ${euro(v.price)})`:''}: ${euro(v.amount)}`);
+  return [
+    `Preventivo ${p.numero||''}${p.cliente?' per '+p.cliente:''}`.trim(),
+    p.name,
+    p.date ? `Data: ${new Date(p.date+'T00:00:00').toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'})}` : '',
+    '',
+    ...righe,
+    Number(p.sconto)>0 ? `Sconto: −${euro(p.sconto)}` : '',
+    `Totale: ${euro(st.totale)}`,
+    p.validoFino ? `Offerta valida fino al ${fmtDate(p.validoFino)}` : '',
+    p.note ? `\n${p.note}` : '',
+  ].filter((r,i,a)=> r!=='' || (a[i-1]!=='' && i>0)).join('\n');
+}
+function copiaPreventivo(id){
+  const p = db.preventivati.find(x=>x.id===id); if(!p) return;
+  const testo = testoPreventivo(p);
+  (navigator.clipboard ? navigator.clipboard.writeText(testo) : Promise.reject())
+    .then(()=>toast('Testo copiato: incollalo in WhatsApp o email.'))
+    .catch(()=>openModal(`<h3>Copia il testo</h3><div class="field"><textarea style="min-height:220px;" readonly>${esc(testo)}</textarea></div><div class="modal-actions"><button class="btn" onclick="closeModal()">Chiudi</button></div>`));
+}
+function stampaPreventivo(id){
+  const p = db.preventivati.find(x=>x.id===id); if(!p) return;
+  const st = prevStats(p);
+  const w = window.open('', '_blank');
+  if(!w) return toast('Consenti i popup per stampare il preventivo.');
+  const data = d=> d ? new Date(d+'T00:00:00').toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'}) : '';
+  w.document.write(`<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${esc(p.numero||'Preventivo')} — ${esc(p.cliente||p.name)}</title>
+  <style>
+    body{ font-family:Inter,Arial,sans-serif; color:#132018; margin:48px; font-size:13px; }
+    h1{ font-size:26px; margin:0 0 4px; } .muted{ color:#6b7a72; }
+    .head{ display:flex; justify-content:space-between; align-items:flex-start; border-bottom:3px solid #30D158; padding-bottom:18px; margin-bottom:24px; }
+    table{ width:100%; border-collapse:collapse; margin-top:16px; } th{ text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#6b7a72; border-bottom:1px solid #dde4e0; padding:8px 6px; }
+    td{ padding:10px 6px; border-bottom:1px solid #eef2f0; } .r{ text-align:right; white-space:nowrap; }
+    .tot td{ border:none; font-size:15px; font-weight:700; } .note{ margin-top:28px; white-space:pre-wrap; }
+    @media print{ body{ margin:18mm; } }
+  </style></head><body>
+  <div class="head"><div><h1>Preventivo</h1><div class="muted">${esc(p.numero||'')} · ${data(p.creato||oggiStr())}</div></div>
+  <div style="text-align:right;"><b>${esc(session?session.name:'')}</b>${p.cliente?`<div class="muted" style="margin-top:10px;">Per</div><b>${esc(p.cliente)}</b>`:''}</div></div>
+  <div style="font-size:16px; font-weight:600;">${esc(p.name)}</div>
+  ${p.date?`<div class="muted" style="margin-top:4px;">Data del lavoro: ${data(p.date)}</div>`:''}
+  <table><thead><tr><th>Descrizione</th><th class="r">Q.tà</th><th class="r">Prezzo</th><th class="r">Importo</th></tr></thead><tbody>
+  ${p.voci.map(v=>`<tr><td>${esc(v.name)}</td><td class="r">${v.qty}</td><td class="r">${euro(v.price)}</td><td class="r">${euro(v.amount)}</td></tr>`).join('')}
+  ${Number(p.sconto)>0?`<tr><td colspan="3" class="r">Sconto</td><td class="r">− ${euro(p.sconto)}</td></tr>`:''}
+  <tr class="tot"><td colspan="3" class="r">Totale</td><td class="r">${euro(st.totale)}</td></tr></tbody></table>
+  ${p.validoFino?`<p class="muted" style="margin-top:20px;">Offerta valida fino al ${data(p.validoFino)}.</p>`:''}
+  ${p.note?`<div class="note">${esc(p.note)}</div>`:''}
+  <script>window.onload=()=>setTimeout(()=>window.print(),200)<\/script></body></html>`);
+  w.document.close();
+}
+
+/* ---------- elimina ---------- */
 function modalEliminaPreventivato(id){
   const p = db.preventivati.find(x=>x.id===id); if(!p) return;
   const n = prevTasks(id).length;
   openModal(`
     <h3>Eliminare "${esc(p.name)}"?</h3>
-    <p style="color:var(--text-dim); font-size:13px; line-height:1.5;">L'evento e le sue voci verranno rimossi. I soldi già incassati restano sui conti.${n?` Le ${n} task collegate restano nella lista Task.`:''}</p>
+    <p style="color:var(--text-dim); font-size:13px; line-height:1.5;">Il preventivo e le sue voci verranno rimossi. I soldi già incassati restano sui conti.${n?` Le ${n} task collegate restano nella lista Task.`:''}<br>Se vuoi solo toglierlo dalla vista, segnalo come <b>Rifiutato</b>.</p>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Annulla</button>
       <button class="btn btn-danger-solid" onclick="confermaEliminaPreventivato('${id}')">Elimina</button>
@@ -1779,115 +2112,123 @@ function confermaEliminaPreventivato(id){
   scollegaTaskEvento(id);
   db.preventivati = db.preventivati.filter(x=>x.id!==id);
   closeModal(); closePrevDrawer();
-  saveDB(); renderAll(); toast('Evento eliminato.');
+  saveDB(); renderAll(); toast('Preventivo eliminato.');
 }
 
-function modalPreventivato(id){
+/* ---------- crea / modifica ---------- */
+function modalPreventivato(id, presetCliente){
   const isEdit = !!id;
   const p = isEdit ? db.preventivati.find(x=>x.id===id) : null;
-  prevDraft = p && prevHasVoci(p) ? p.voci.map(v=>({...v})) : [];
-  const conVoci = prevDraft.length>0;
+  prevDraft = p ? p.voci.map(v=>({...v})) : [{ id:uid(), name:'', qty:1, price:'', done:false }];
+  const clienti = elencoClientiNomi();
+  const validDefault = (()=>{ const d=new Date(); d.setDate(d.getDate()+30); return dateKeyFromDate(d); })();
   openModal(`
-    <h3>${isEdit?'Modifica evento':'Nuovo evento preventivato'}</h3>
-    <div class="field"><label>Nome evento / cliente</label><input id="f-name" value="${p?esc(p.name):''}" placeholder="Es. Matrimonio Rossi"></div>
+    <h3>${isEdit?'Modifica preventivo':'Nuovo preventivo'}</h3>
     <div class="field-row">
-      <div class="field"><label>Importo (€)</label><input id="f-amount" type="number" step="0.01" value="${p ? (conVoci ? prevStats({voci:prevDraft}).totale : p.amount) : ''}" placeholder="0.00" ${conVoci?'disabled':''}></div>
-      <div class="field"><label>Data</label><input id="f-date" type="date" value="${p?p.date||'':''}"></div>
+      <div class="field"><label>Cliente</label><input id="f-cliente" list="dl-clienti" value="${p?esc(p.cliente||''):esc(presetCliente||'')}" placeholder="Es. Marco Rossi"><datalist id="dl-clienti">${clienti.map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Numero</label><input id="f-numero" value="${p?esc(p.numero||''):prossimoNumeroPrev()}"></div>
     </div>
+    <div class="field"><label>Titolo del lavoro</label><input id="f-name" value="${p?esc(p.name):''}" placeholder="Es. Servizio fotografico matrimonio"></div>
+    <div class="field-row">
+      <div class="field"><label>Data del lavoro</label><input id="f-date" type="date" value="${p?p.date||'':''}"></div>
+      <div class="field"><label>Offerta valida fino al</label><input id="f-valido" type="date" value="${p?p.validoFino||'':validDefault}"></div>
+    </div>
+    <div class="field"><label>Stato</label><select id="f-stato">
+      ${PREV_STATI.map(s=>`<option value="${s.key}" ${(p?p.stato:'bozza')===s.key?'selected':''}>${s.label}</option>`).join('')}
+    </select></div>
     <div class="field">
-      <label>Voci del preventivo (opzionale)</label>
+      <label>Voci</label>
       <div class="voci-editor">
+        <div class="voci-editor-row voci-editor-labels"><span>Descrizione</span><span>Q.tà</span><span>Prezzo €</span><span>Importo</span><span></span></div>
         <div id="voci-editor-rows"></div>
         <button type="button" class="voci-editor-add" onclick="aggiungiVoceDraft()">+ Aggiungi voce</button>
       </div>
-      <div class="voci-total" id="voci-total"></div>
     </div>
-    <div class="field"><label>Nota (opzionale)</label><input id="f-note" value="${p?esc(p.note||''):''}" placeholder="Es. acconto già versato"></div>
+    <div class="field-row">
+      <div class="field"><label>Sconto (€)</label><input id="f-sconto" type="number" step="0.01" min="0" value="${p&&p.sconto?p.sconto:''}" placeholder="0.00" oninput="aggiornaTotaleVoci()"></div>
+      <div class="field"><label>Totale</label><div class="voci-total-box" id="voci-total">—</div></div>
+    </div>
+    <div class="field"><label>Note per il cliente (opzionale)</label><textarea id="f-note" rows="3" placeholder="Es. acconto del 30% alla conferma, saldo alla consegna">${p?esc(p.note||''):''}</textarea></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Annulla</button>
-      <button class="btn btn-primary" onclick="savePreventivato('${id||''}')">${isEdit?'Salva':'Crea'}</button>
+      <button class="btn btn-primary" onclick="savePreventivato('${id||''}')">${isEdit?'Salva':'Crea preventivo'}</button>
     </div>
   `);
+  modalEl.classList.add('modal-wide');
   renderVociDraft();
 }
 function renderVociDraft(){
-  const box = document.getElementById('voci-editor-rows');
-  if(!box) return;
+  const box = document.getElementById('voci-editor-rows'); if(!box) return;
   box.innerHTML = prevDraft.map(v=>`
-    <div class="voci-editor-row ${v.done?'locked':''}">
-      <input value="${esc(v.name||'')}" placeholder="Descrizione voce" ${v.done?'disabled':''} oninput="aggiornaVoceDraft('${v.id}','name',this.value)">
-      <input type="number" step="0.01" value="${v.amount||v.amount===0?v.amount:''}" placeholder="0.00" ${v.done?'disabled':''} oninput="aggiornaVoceDraft('${v.id}','amount',this.value)">
-      ${v.done ? `<span class="pill" style="background:var(--mint-dim); color:var(--mint-strong); padding:4px 6px; justify-self:center;" title="Già incassata">✓</span>` : `<button type="button" class="icon-btn btn-danger" title="Rimuovi voce" onclick="rimuoviVoceDraft('${v.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>`}
-    </div>
-  `).join('');
+    <div class="voci-editor-row ${v.done?'locked':''}" data-id="${v.id}">
+      <input value="${esc(v.name||'')}" placeholder="Es. Servizio 8 ore" ${v.done?'disabled':''} oninput="aggiornaVoceDraft('${v.id}','name',this.value)">
+      <input type="number" step="0.5" min="0" value="${v.qty??1}" ${v.done?'disabled':''} oninput="aggiornaVoceDraft('${v.id}','qty',this.value)">
+      <input type="number" step="0.01" value="${v.price===''||v.price===undefined?'':v.price}" placeholder="0.00" ${v.done?'disabled':''} oninput="aggiornaVoceDraft('${v.id}','price',this.value)">
+      <span class="voci-editor-amount" id="va-${v.id}">${euro((Number(v.qty)||0)*(Number(v.price)||0))}</span>
+      ${v.done ? `<span class="pill" style="background:var(--mint-dim); color:var(--mint); padding:4px 6px; justify-self:center;" title="Già incassata">✓</span>` : `<button type="button" class="icon-btn btn-danger" title="Rimuovi voce" onclick="rimuoviVoceDraft('${v.id}')">${ICO_X}</button>`}
+    </div>`).join('');
   aggiornaTotaleVoci();
 }
 function aggiornaTotaleVoci(){
-  const totEl = document.getElementById('voci-total');
-  const amountEl = document.getElementById('f-amount');
-  if(!totEl || !amountEl) return;
-  if(!prevDraft.length){
-    totEl.innerHTML = `<span>Suddividi il preventivo in voci per incassarle una alla volta.</span>`;
-    amountEl.disabled = false;
-    return;
-  }
-  const st = prevStats({ voci: prevDraft });
-  amountEl.disabled = true;
-  amountEl.value = st.totale.toFixed(2);
-  totEl.innerHTML = `<span>${prevDraft.length} voc${prevDraft.length===1?'e':'i'}${st.incassato?` · già incassati ${euro(st.incassato)}`:''}</span><b>${euro(st.totale)}</b>`;
+  const el = document.getElementById('voci-total'); if(!el) return;
+  const lordo = prevDraft.reduce((s,v)=>s+(Number(v.qty)||0)*(Number(v.price)||0),0);
+  const sconto = parseFloat(document.getElementById('f-sconto')?.value)||0;
+  el.innerHTML = `<b>${euro(Math.max(0, lordo-sconto))}</b>${sconto?` <span>(${euro(lordo)} − ${euro(sconto)})</span>`:''}`;
 }
 function aggiungiVoceDraft(){
-  prevDraft.push({ id:uid(), name:'', amount:'', done:false });
+  prevDraft.push({ id:uid(), name:'', qty:1, price:'', done:false });
   renderVociDraft();
-  const rows = document.querySelectorAll('#voci-editor-rows .voci-editor-row input');
-  if(rows.length>=2) rows[rows.length-2].focus();
+  const rows = document.querySelectorAll('#voci-editor-rows .voci-editor-row');
+  rows[rows.length-1]?.querySelector('input')?.focus();
 }
 function aggiornaVoceDraft(vid, campo, valore){
-  const v = prevDraft.find(x=>x.id===vid);
-  if(!v || v.done) return;
-  v[campo] = campo==='amount' ? valore : valore;
+  const v = prevDraft.find(x=>x.id===vid); if(!v || v.done) return;
+  v[campo] = valore;
+  const a = document.getElementById('va-'+vid); if(a) a.textContent = euro((Number(v.qty)||0)*(Number(v.price)||0));
   aggiornaTotaleVoci();
 }
-function rimuoviVoceDraft(vid){
-  prevDraft = prevDraft.filter(x=>x.id!==vid || x.done);
-  renderVociDraft();
-}
+function rimuoviVoceDraft(vid){ prevDraft = prevDraft.filter(x=>x.id!==vid || x.done); renderVociDraft(); }
 function savePreventivato(id){
   const name = document.getElementById('f-name').value.trim();
-  const date = document.getElementById('f-date').value;
-  const note = document.getElementById('f-note').value.trim();
-  if(!name) return toast('Inserisci un nome.');
+  const cliente = document.getElementById('f-cliente').value.trim();
+  if(!name) return toast('Dai un titolo al lavoro.');
   const voci = prevDraft
-    .map(v=>({ ...v, name:String(v.name||'').trim(), amount: parseFloat(v.amount)||0 }))
-    .filter(v=> v.done || v.name || v.amount>0)
-    .map(v=>({ ...v, name: v.name || 'Voce' }));
-  const amount = voci.length ? null : (parseFloat(document.getElementById('f-amount').value)||0);
-  if(voci.length && voci.every(v=>v.done)) return toast('Aggiungi almeno una voce ancora da incassare.');
-
+    .map(v=>({ ...v, name:String(v.name||'').trim(), qty: v.done ? Number(v.qty)||1 : (parseFloat(v.qty)||0), price: v.done ? Number(v.price) : (parseFloat(v.price)||0) }))
+    .filter(v=> v.done || v.name || v.price>0)
+    .map(v=>({ ...v, name:v.name||'Voce', amount: v.done ? v.amount : Math.round(v.qty*v.price*100)/100 }));
+  if(!voci.length) return toast('Aggiungi almeno una voce con un prezzo.');
+  const dati = {
+    name, cliente,
+    numero: document.getElementById('f-numero').value.trim(),
+    date: document.getElementById('f-date').value,
+    validoFino: document.getElementById('f-valido').value,
+    stato: document.getElementById('f-stato').value,
+    sconto: Math.max(0, parseFloat(document.getElementById('f-sconto').value)||0),
+    note: document.getElementById('f-note').value.trim(),
+  };
   let p;
-  if(id){
-    p = db.preventivati.find(x=>x.id===id);
-    p.name=name; p.date=date; p.note=note;
-  } else {
-    p = { id:uid(), name, date, note, color: ICON_COLORS[Math.floor(Math.random()*ICON_COLORS.length)] };
-    db.preventivati.push(p);
-  }
-  if(voci.length){ p.voci = voci; recalcPrev(p); }
-  else { delete p.voci; p.amount = amount; }
-  prevTasks(p.id).forEach(t=>{ t.prevNome = p.name; });
+  if(id){ p = db.preventivati.find(x=>x.id===id); Object.assign(p, dati); }
+  else { p = { id:uid(), ...dati, creato:oggiStr(), color: ICON_COLORS[Math.floor(Math.random()*ICON_COLORS.length)] }; db.preventivati.push(p); }
+  p.voci = voci;
+  const idsVoci = new Set(voci.map(v=>v.id));
+  prevTasks(p.id).forEach(t=>{ t.prevNome = p.name; if(t.voceId && !idsVoci.has(t.voceId)) t.voceId=null; (t.subtasks||[]).forEach(s=>{ if(s.voceId && !idsVoci.has(s.voceId)) s.voceId=null; }); });
+  if(p.stato==='accettato' && !p.accettatoIl) p.accettatoIl = oggiStr();
+  if(p.stato==='inviato' && !p.inviatoIl) p.inviatoIl = oggiStr();
+  recalcPrev(p);
   prevDraft = [];
-  saveDB(); closeModal(); renderAll(); toast('Evento salvato.');
-  if(!id && document.getElementById('page-preventivati').classList.contains('active')) openPrevDrawer(p.id);
+  saveDB(); closeModal(); renderAll(); toast(id?'Preventivo aggiornato.':'Preventivo creato.');
+  if(!id) openPrevDrawer(p.id);
 }
 
+/* ---------- incassi ---------- */
 function modalIncassaVoce(pid, vid){
   const p = db.preventivati.find(x=>x.id===pid);
-  const v = p && (p.voci||[]).find(x=>x.id===vid);
+  const v = p && p.voci.find(x=>x.id===vid);
   if(!v || v.done) return;
   if(!db.accounts.length) return toast('Crea prima almeno un conto.');
   openModal(`
     <h3>Incassa voce</h3>
-    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">"${esc(v.name)}" di <strong style="color:var(--text);">${esc(p.name)}</strong>. Puoi correggere l'importo se hai ricevuto una cifra diversa.</p>
+    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">"${esc(v.name)}" di <strong style="color:var(--text);">${esc(p.name)}</strong>.${p.stato!=='accettato'?' Il preventivo verrà segnato come <b>accettato</b>.':''} Puoi correggere l'importo se hai ricevuto una cifra diversa.</p>
     <div class="field"><label>Importo ricevuto (€)</label><input id="f-voce-importo" type="number" step="0.01" value="${v.amount}"></div>
     <div class="field"><label>Conto</label><select id="f-account">${db.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></div>
     <div class="modal-actions">
@@ -1896,26 +2237,27 @@ function modalIncassaVoce(pid, vid){
     </div>
   `);
 }
+function chiudiSeCompleto(p){
+  if(p.voci.every(v=>v.done)){ p.stato = 'completato'; p.completatoIl = oggiStr(); segnaStipendioRicevuto(p); return true; }
+  return false;
+}
 function confermaIncassaVoce(pid, vid){
   const p = db.preventivati.find(x=>x.id===pid);
-  const v = p && (p.voci||[]).find(x=>x.id===vid);
+  const v = p && p.voci.find(x=>x.id===vid);
   if(!v || v.done) return;
   const acc = db.accounts.find(x=>x.id===document.getElementById('f-account').value);
   const importo = parseFloat(document.getElementById('f-voce-importo').value)||0;
   if(!acc) return toast('Seleziona un conto.');
   if(importo<=0) return toast('Inserisci un importo valido.');
   acc.balance = Number(acc.balance) + importo;
-  db.movimenti.push({ id:uid(), type:'entrata', name:`${p.name} · ${v.name}`, amount:importo, date:oggiStr(), accountId:acc.id, category:'lavoro' });
+  db.movimenti.push({ id:uid(), type:'entrata', name:`${p.name} · ${v.name}`, amount:importo, date:oggiStr(), accountId:acc.id, category:'lavoro', fromPrev:p.id });
+  if(Math.abs(importo - v.amount) > 0.004){ v.price = Math.round(importo/(Number(v.qty)||1)*100)/100; }
   v.amount = importo; v.done = true; v.doneDate = oggiStr(); v.accountId = acc.id;
+  if(p.stato!=='accettato') { p.stato='accettato'; if(!p.accettatoIl) p.accettatoIl = oggiStr(); }
+  const chiuso = chiudiSeCompleto(p);
   recalcPrev(p);
-  const chiuso = p.voci.every(x=>x.done);
-  if(chiuso){
-    segnaStipendioRicevuto(p);
-    scollegaTaskEvento(pid);
-    db.preventivati = db.preventivati.filter(x=>x.id!==pid);
-  }
   saveDB(); closeModal(); renderAll();
-  toast(chiuso ? `Tutte le voci incassate: "${p.name}" completato 🎉` : `${euro(importo)} su ${acc.name} · restano ${euro(p.amount)}`);
+  toast(chiuso ? `Tutto incassato: "${p.name}" completato 🎉` : `${euro(importo)} su ${acc.name} · restano ${euro(p.amount)}`);
 }
 function segnaStipendioRicevuto(p){
   if(!p.fromStipendioId) return;
@@ -1923,14 +2265,13 @@ function segnaStipendioRicevuto(p){
   if(st && !st.ricevuti.includes(p.fromStipendioMese)) st.ricevuti.push(p.fromStipendioMese);
 }
 function convertToAccount(id){
-  const p = db.preventivati.find(x=>x.id===id);
-  if(!p) return;
+  const p = db.preventivati.find(x=>x.id===id); if(!p) return;
   if(!db.accounts.length) return toast('Crea prima almeno un conto.');
-  const conVoci = prevHasVoci(p);
-  const aperte = conVoci ? p.voci.filter(v=>!v.done) : [];
+  const residuo = prevStats(p).residuo;
+  const aperte = p.voci.filter(v=>!v.done);
   openModal(`
-    <h3>${conVoci?'Incassa il residuo':'Segna come incassato'}</h3>
-    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">A quale conto aggiungere ${euro(p.amount)} da "${esc(p.name)}"?${conVoci?` Verranno segnate come incassate ${aperte.length} voc${aperte.length===1?'e':'i'}: ${aperte.map(v=>esc(v.name)).join(', ')}.`:''}</p>
+    <h3>${isPrevAuto(p)?'Segna come incassato':'Incassa il resto'}</h3>
+    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">A quale conto aggiungere ${euro(residuo)} da "${esc(p.name)}"?${!isPrevAuto(p)&&aperte.length?` Verranno segnate come incassate: ${aperte.map(v=>esc(v.name)).join(', ')}.`:''}</p>
     <div class="field"><select id="f-account">${db.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Annulla</button>
@@ -1939,16 +2280,99 @@ function convertToAccount(id){
   `);
 }
 function confirmConvert(id){
-  const accId = document.getElementById('f-account').value;
   const p = db.preventivati.find(x=>x.id===id);
-  const acc = db.accounts.find(x=>x.id===accId);
+  const acc = db.accounts.find(x=>x.id===document.getElementById('f-account').value);
   if(!p || !acc) return toast('Seleziona un conto.');
-  acc.balance = Number(acc.balance) + Number(p.amount);
-  db.movimenti.push({ id:uid(), type:'entrata', name:p.name, amount:Number(p.amount), date:oggiStr(), accountId:acc.id, category:'altro' });
-  segnaStipendioRicevuto(p);
-  scollegaTaskEvento(id);
-  db.preventivati = db.preventivati.filter(x=>x.id!==id);
-  saveDB(); closeModal(); renderAll(); toast(`${euro(p.amount)} aggiunti a ${acc.name}.`);
+  const residuo = prevStats(p).residuo;
+  acc.balance = Number(acc.balance) + residuo;
+  db.movimenti.push({ id:uid(), type:'entrata', name:p.name, amount:residuo, date:oggiStr(), accountId:acc.id, category: isPrevAuto(p)?'altro':'lavoro', fromPrev: isPrevAuto(p)?undefined:p.id });
+  p.voci.forEach(v=>{ if(!v.done){ v.done=true; v.doneDate=oggiStr(); v.accountId=acc.id; } });
+  if(isPrevAuto(p)){
+    segnaStipendioRicevuto(p);
+    db.preventivati = db.preventivati.filter(x=>x.id!==id);
+  } else {
+    if(p.stato!=='accettato' && !p.accettatoIl) p.accettatoIl = oggiStr();
+    p.stato='accettato';
+    chiudiSeCompleto(p); recalcPrev(p);
+  }
+  saveDB(); closeModal(); renderAll(); toast(`${euro(residuo)} aggiunti a ${acc.name}.`);
+}
+
+/* ==================== CLIENTI (costruiti dai preventivi) ==================== */
+function chiaveCliente(n){ return String(n||'').trim().toLowerCase(); }
+function elencoClientiNomi(){
+  const m = new Map();
+  db.preventivati.forEach(p=>{ if(p.cliente && !m.has(chiaveCliente(p.cliente))) m.set(chiaveCliente(p.cliente), p.cliente.trim()); });
+  return [...m.values()].sort((a,b)=>a.localeCompare(b,'it'));
+}
+function datiClienti(){
+  const m = new Map();
+  db.preventivati.filter(p=>!isPrevAuto(p)).forEach(p=>{
+    const k = chiaveCliente(p.cliente) || '_';
+    if(!m.has(k)) m.set(k, { nome: p.cliente ? p.cliente.trim() : 'Senza cliente', key:k, prev:[], lavorato:0, incassato:0, daIncassare:0, trattativa:0, ultimo:'' });
+    const c = m.get(k), st = prevStats(p);
+    c.prev.push(p);
+    if(['accettato','completato'].includes(p.stato)) c.lavorato += st.totale;
+    c.incassato += st.incassato;
+    if(p.stato==='accettato') c.daIncassare += st.residuo;
+    if(['bozza','inviato'].includes(p.stato)) c.trattativa += st.totale;
+    const d = p.date || p.creato || '';
+    if(d > c.ultimo) c.ultimo = d;
+  });
+  return [...m.values()];
+}
+function renderClienti(){
+  const f = filters.clienti;
+  let list = datiClienti().sort((a,b)=> b.lavorato-a.lavorato || a.nome.localeCompare(b.nome));
+  if(f.q) list = list.filter(c=>matches(c.nome,f.q));
+  const conDebiti = list.filter(c=>c.daIncassare>0);
+  document.getElementById('page-clienti').innerHTML = `
+    <div class="topbar">
+      <div><div class="page-title">Clienti</div><div class="page-sub">${plur(list.filter(c=>c.key!=='_').length,'cliente','clienti')} · si aggiornano da soli dai preventivi</div></div>
+      <div class="topbar-actions"><button class="btn btn-primary" onclick="modalPreventivato()">+ Nuovo preventivo</button></div>
+    </div>
+    ${conDebiti.length ? `<div class="card" style="margin-bottom:18px; border-color:rgba(10,132,255,0.3);">
+      <div class="card-title">Da sollecitare</div>
+      <div class="row-sub" style="white-space:normal; font-size:12.5px; margin-top:6px;">${conDebiti.map(c=>`<b style="color:var(--text)">${esc(c.nome)}</b> ${euro(c.daIncassare)}`).join(' · ')}</div>
+    </div>` : ''}
+    ${searchBar('clienti','Cerca cliente…')}
+    <div class="list">
+      ${list.length ? list.map(c=>`
+        <div class="row-item" style="cursor:pointer;" onclick="apriCliente('${esc(c.nome).replace(/'/g,"\\'")}')">
+          <div class="row-icon" style="background:var(--mint-dim); color:var(--mint);">${esc(c.nome.charAt(0).toUpperCase())}</div>
+          <div class="row-main">
+            <div class="row-title">${esc(c.nome)}</div>
+            <div class="row-sub">${plur(c.prev.length,'preventivo','preventivi')}${c.ultimo?' · ultimo '+fmtDate(c.ultimo):''}${c.trattativa?` · ${euro(c.trattativa)} in trattativa`:''}</div>
+          </div>
+          ${c.daIncassare>0?`<span class="pill" style="background:var(--blue-dim); color:var(--blue);">${euro(c.daIncassare)} da incassare</span>`:''}
+          <div class="row-amount" title="Totale lavori accettati">${euro(c.lavorato)}</div>
+        </div>`).join('') : emptyState('Nessun cliente ancora: compaiono qui quando scrivi il nome del cliente in un preventivo.')}
+    </div>
+  `;
+}
+function apriCliente(nome){
+  const c = datiClienti().find(x=>x.key===chiaveCliente(nome)) ; if(!c) return;
+  const ord = [...c.prev].sort((a,b)=>(b.date||b.creato||'').localeCompare(a.date||a.creato||''));
+  openModal(`
+    <h3>${esc(c.nome)}</h3>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:16px;">
+      <div class="card" style="padding:12px;"><div class="card-title">Lavorato</div><div class="stat-value" style="font-size:16px;">${euro(c.lavorato)}</div></div>
+      <div class="card" style="padding:12px;"><div class="card-title">Incassato</div><div class="stat-value" style="font-size:16px; color:var(--mint);">${euro(c.incassato)}</div></div>
+      <div class="card" style="padding:12px;"><div class="card-title">Da incassare</div><div class="stat-value" style="font-size:16px; color:var(--blue);">${euro(c.daIncassare)}</div></div>
+    </div>
+    <div class="list">
+      ${ord.map(p=>`<div class="row-item" style="cursor:pointer;" onclick="closeModal(); openPrevDrawer('${p.id}')">
+        <div class="row-main"><div class="row-title">${esc(p.name)}</div><div class="row-sub">${esc(p.numero||'')} · ${p.date?fmtDate(p.date):'senza data'}</div></div>
+        ${statoPill(p.stato)}
+        <div class="row-amount">${euro(prevStats(p).totale)}</div>
+      </div>`).join('')}
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Chiudi</button>
+      ${c.key!=='_'?`<button class="btn btn-primary" onclick="closeModal(); modalPreventivato(null, '${esc(c.nome).replace(/'/g,"\\'")}')">+ Preventivo per ${esc(c.nome)}</button>`:''}
+    </div>
+  `);
+  modalEl.classList.add('modal-wide');
 }
 
 /* ==================== MANCANTI ==================== */
@@ -2204,195 +2628,6 @@ function checkSpeseFisseAutomatiche(){
   if(changed) saveDB();
 }
 
-/* ==================== OBIETTIVI ==================== */
-function renderObiettivi(){
-  const f = filters.obiettivi;
-  let list = [...db.obiettivi];
-  if(f.q) list = list.filter(o=> matches(o.name,f.q));
-
-  const totaleRisparmiato = db.obiettivi.reduce((s,o)=>s+Number(o.current||0),0);
-  const totaleTarget = db.obiettivi.reduce((s,o)=>s+Number(o.target||0),0);
-  const pctGlobale = totaleTarget ? Math.min(100, totaleRisparmiato/totaleTarget*100) : 0;
-  const medaglieTotali = db.obiettivi.reduce((s,o)=>s+((o.medaglie||[]).length),0);
-
-  document.getElementById('page-obiettivi').innerHTML = `
-    <div class="topbar">
-      <div><div class="page-title">Obiettivi finanziari</div><div class="page-sub">${db.obiettivi.length} obiettivi attivi</div></div>
-      <div class="topbar-actions"><button class="btn btn-primary" onclick="modalObiettivo()">+ Nuovo obiettivo</button></div>
-    </div>
-
-    ${db.obiettivi.length ? `
-    <div class="grid grid-3" style="margin-bottom:24px;">
-      <div class="card">
-        <div class="card-title">Totale risparmiato</div>
-        <div class="stat-value" style="color:var(--mint); font-size:20px;">${euro(totaleRisparmiato)}</div>
-        <div class="stat-trend" style="color:var(--text-faint)">su ${euro(totaleTarget)} di obiettivi totali</div>
-      </div>
-      <div class="card">
-        <div class="card-title">Progresso complessivo</div>
-        <div class="stat-value" style="font-size:20px;">${pctGlobale.toFixed(0)}%</div>
-        <div class="progress-track" style="margin-top:8px;"><div class="progress-fill" style="width:${pctGlobale}%; background:var(--mint);"></div></div>
-      </div>
-      <div class="card">
-        <div class="card-title">Medaglie sbloccate</div>
-        <div class="stat-value" style="font-size:20px;">${medaglieTotali} 🏅</div>
-        <div class="stat-trend" style="color:var(--text-faint)">traguardi raggiunti in totale</div>
-      </div>
-    </div>
-    ` : ''}
-
-    ${searchBar('obiettivi','Cerca obiettivo...')}
-    <div class="grid grid-3">
-      ${list.length ? list.map(o=>renderObiettivoCard(o)).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState(db.obiettivi.length ? 'Nessun obiettivo corrisponde alla ricerca.' : 'Nessun obiettivo. Crea il primo, es. "Fondo emergenze" o "Nuovo drone".')}</div>`}
-    </div>
-  `;
-}
-function renderObiettivoCard(o){
-  const pct = Math.min(100, (Number(o.current)/Number(o.target)*100)||0);
-  const raggiunte = medaglieRaggiunte(pct);
-  const mancano = Math.max(0, Number(o.target) - Number(o.current));
-  const completato = pct>=100;
-  return `<div class="card" style="${completato?`border-color:${o.color}55;`:''}">
-    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-      <div class="card-title">${esc(o.name)}${completato?' 🎉':''}</div>
-      <div class="row-actions">
-        <button class="icon-btn" title="Storico versamenti" onclick="modalStoricoObiettivo('${o.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 15l4-4 4 4 5-6"/></svg></button>
-        <button class="icon-btn" onclick="modalObiettivo('${o.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
-        <button class="icon-btn btn-danger" onclick="deleteItem('obiettivi','${o.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></button>
-      </div>
-    </div>
-    <div class="stat-value" style="margin-top:8px; font-size:20px;">${euro(o.current)} <span style="color:var(--text-faint); font-size:13px; font-weight:500;">/ ${euro(o.target)}</span></div>
-    <div class="progress-track" style="margin-top:8px;"><div class="progress-fill" style="width:${pct}%; background:${o.color};"></div></div>
-    <div class="row-sub" style="margin-top:8px;">${completato ? 'Obiettivo raggiunto!' : euro(mancano)+' mancanti'}${o.deadline?' · entro '+fmtDate(o.deadline):''}</div>
-    <div style="display:flex; gap:6px; margin-top:14px;">
-      ${MEDAGLIE_SOGLIE.map(s=>`
-        <span title="${s}%" style="width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; flex-shrink:0; ${raggiunte.includes(s) ? `background:${o.color}22; color:${o.color}; border:1px solid ${o.color}55;` : 'background:var(--surface); color:var(--text-faint); border:1px solid var(--border-soft);'}">${raggiunte.includes(s)?'🏅':s}</span>
-      `).join('')}
-    </div>
-    <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:14px;" onclick="modalContributoObiettivo('${o.id}')">+ Aggiungi risparmio</button>
-  </div>`;
-}
-function modalObiettivo(id){
-  const isEdit=!!id; const o = isEdit? db.obiettivi.find(x=>x.id===id): null;
-  openModal(`
-    <h3>${isEdit?'Modifica obiettivo':'Nuovo obiettivo'}</h3>
-    <div class="field"><label>Nome</label><input id="f-name" value="${o?esc(o.name):''}" placeholder="Es. Fondo emergenze"></div>
-    <div class="field-row">
-      <div class="field"><label>Attuale (€)</label><input id="f-current" type="number" step="0.01" value="${o?o.current:'0'}"></div>
-      <div class="field"><label>Obiettivo (€)</label><input id="f-target" type="number" step="0.01" value="${o?o.target:''}"></div>
-    </div>
-    <div class="field"><label>Scadenza (opzionale)</label><input id="f-deadline" type="date" value="${o?o.deadline||'':''}"></div>
-    <div class="field"><label>Colore</label>
-      <div class="color-picker">${ICON_COLORS.map(c=>`<div class="color-swatch ${o&&o.color===c?'selected':''}" style="background:${c}" data-color="${c}" onclick="selectColor(this)"></div>`).join('')}</div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Annulla</button>
-      <button class="btn btn-primary" onclick="saveObiettivo('${id||''}')">${isEdit?'Salva':'Crea'}</button>
-    </div>
-  `);
-}
-function saveObiettivo(id){
-  const name = document.getElementById('f-name').value.trim();
-  const current = parseFloat(document.getElementById('f-current').value)||0;
-  const target = parseFloat(document.getElementById('f-target').value)||0;
-  const deadline = document.getElementById('f-deadline').value;
-  const colorEl = document.querySelector('.color-swatch.selected');
-  const color = colorEl ? colorEl.dataset.color : ICON_COLORS[1];
-  if(!name || !target) return toast('Inserisci nome e importo obiettivo.');
-  if(id){
-    const o=db.obiettivi.find(x=>x.id===id);
-    o.name=name; o.current=current; o.target=target; o.deadline=deadline; o.color=color;
-  } else {
-    db.obiettivi.push({ id:uid(), name, current, target, deadline, color, contributi:[], medaglie:medaglieRaggiunte(Math.min(100,(current/target*100)||0)) });
-  }
-  saveDB(); closeModal(); renderAll(); toast('Obiettivo salvato.');
-}
-function modalContributoObiettivo(id){
-  const o = db.obiettivi.find(x=>x.id===id);
-  if(!o) return;
-  openModal(`
-    <h3>Aggiungi risparmio</h3>
-    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">Per "${esc(o.name)}"</p>
-    <div class="field">
-      <label>Tipo</label>
-      <div style="display:flex; gap:18px; margin-top:6px;">
-        <label class="chip-check"><input type="radio" name="f-contrib-tipo" value="deposito" checked> Deposito</label>
-        <label class="chip-check"><input type="radio" name="f-contrib-tipo" value="prelievo"> Prelievo</label>
-      </div>
-    </div>
-    <div class="field"><label>Importo (€)</label><input id="f-contrib-amount" type="number" step="0.01" placeholder="0.00"></div>
-    <div class="field">
-      <label>Conto (opzionale)</label>
-      <select id="f-contrib-account">
-        <option value="">Nessuno, aggiorna solo il progresso</option>
-        ${db.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join('')}
-      </select>
-    </div>
-    <p style="color:var(--text-faint); font-size:11.5px; margin-top:4px;">Se scegli un conto, i soldi si spostano davvero: un deposito li sottrae dal conto, un prelievo li restituisce.</p>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Annulla</button>
-      <button class="btn btn-primary" onclick="salvaContributoObiettivo('${id}')">Conferma</button>
-    </div>
-  `);
-}
-function salvaContributoObiettivo(id){
-  const o = db.obiettivi.find(x=>x.id===id);
-  if(!o) return;
-  const tipo = document.querySelector('input[name="f-contrib-tipo"]:checked').value;
-  const amount = parseFloat(document.getElementById('f-contrib-amount').value)||0;
-  const accountId = document.getElementById('f-contrib-account').value;
-  if(amount<=0) return toast('Inserisci un importo valido.');
-
-  const pctPrima = Math.min(100, (Number(o.current)/Number(o.target)*100)||0);
-  o.current = tipo==='deposito' ? Number(o.current)+amount : Math.max(0, Number(o.current)-amount);
-
-  if(accountId){
-    const acc = db.accounts.find(a=>a.id===accountId);
-    if(acc){
-      acc.balance = Number(acc.balance) + (tipo==='deposito' ? -amount : amount);
-      db.movimenti.push({ id:uid(), type: tipo==='deposito' ? 'uscita' : 'entrata', name:`${tipo==='deposito'?'Risparmio per':'Prelievo da'} ${o.name}`, amount, date:oggiStr(), accountId, category:'risparmio' });
-    }
-  }
-
-  if(!o.contributi) o.contributi = [];
-  o.contributi.push({ id:uid(), tipo, amount, date:oggiStr(), accountId: accountId||null });
-
-  const pctDopo = Math.min(100, (Number(o.current)/Number(o.target)*100)||0);
-  if(!o.medaglie) o.medaglie = [];
-  const nuove = MEDAGLIE_SOGLIE.filter(s=> pctDopo>=s && pctPrima<s && !o.medaglie.includes(s));
-  nuove.forEach(s=> o.medaglie.push(s));
-
-  saveDB(); closeModal(); renderAll();
-  if(nuove.length){
-    const ultima = nuove[nuove.length-1];
-    toast(ultima===100 ? `🎉 Obiettivo "${o.name}" raggiunto!` : `🏅 Hai raggiunto il ${ultima}% di "${o.name}"!`);
-  } else {
-    toast('Risparmio aggiornato.');
-  }
-}
-function modalStoricoObiettivo(id){
-  const o = db.obiettivi.find(x=>x.id===id);
-  if(!o) return;
-  const contributi = [...(o.contributi||[])].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  openModal(`
-    <h3>Storico — ${esc(o.name)}</h3>
-    <div class="list">
-      ${contributi.length ? contributi.map(c=>{
-        const acc = c.accountId ? db.accounts.find(a=>a.id===c.accountId) : null;
-        const isDep = c.tipo==='deposito';
-        return `<div class="row-item">
-          <div class="row-icon" style="background:${isDep?'var(--mint-dim)':'var(--coral-dim)'}; color:${isDep?'var(--mint)':'var(--coral)'};">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">${isDep?'<path d="M12 19V5M5 12l7-7 7 7"/>':'<path d="M12 5v14M19 12l-7 7-7-7"/>'}</svg>
-          </div>
-          <div class="row-main"><div class="row-title">${isDep?'Deposito':'Prelievo'}</div><div class="row-sub">${fmtDate(c.date)}${acc?' · '+esc(acc.name):''}</div></div>
-          <div class="row-amount" style="color:${isDep?'var(--mint)':'var(--coral)'}">${isDep?'+':'−'} ${euro(c.amount)}</div>
-        </div>`;
-      }).join('') : emptyState('Nessun versamento ancora. Usa "+ Aggiungi risparmio" per iniziare.')}
-    </div>
-    <div class="modal-actions"><button class="btn" onclick="closeModal()">Chiudi</button></div>
-  `);
-}
-
 /* ==================== TASK — To-Do list con sotto-task ==================== */
 let taskExpanded = new Set(); // stato solo di sessione: quali task hanno la checklist aperta
 
@@ -2418,9 +2653,9 @@ function renderTask(){
   else if(f.prev) list = list.filter(t=>t.prevId===f.prev);
   const prevFilterHtml = db.preventivati.length ? `
     <select class="filter-select" onchange="setFilter('task','prev',this.value)">
-      <option value="">Tutti gli eventi</option>
-      <option value="_none" ${f.prev==='_none'?'selected':''}>Senza evento</option>
-      ${db.preventivati.map(p=>`<option value="${p.id}" ${f.prev===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
+      <option value="">Tutti i preventivi</option>
+      <option value="_none" ${f.prev==='_none'?'selected':''}>Senza preventivo</option>
+      ${db.preventivati.filter(p=>!isPrevAuto(p) && p.stato!=='rifiutato').map(p=>`<option value="${p.id}" ${f.prev===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
     </select>` : '';
 
   document.getElementById('page-task').innerHTML = `
@@ -2429,12 +2664,16 @@ function renderTask(){
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalTask()">+ Nuovo task</button></div>
     </div>
 
-    ${searchBar('task','Cerca task, sotto-task o evento...', prevFilterHtml)}
+    ${searchBar('task','Cerca task, sottotask o preventivo...', prevFilterHtml)}
     <div class="task-list" id="task-list">
       ${list.length ? list.map(t=>taskCardHtml(t, dragDisabled)).join('') : emptyState(db.tasks.length ? 'Nessun task corrisponde alla ricerca.' : 'Nessun task ancora. Aggiungi il primo lavoro da fare e organizzalo in sotto-task.')}
     </div>
   `;
   attachTaskDragHandlers();
+  document.querySelectorAll('#task-list .subtask-list').forEach(el=>{
+    const t = db.tasks.find(x=>x.id===el.dataset.task);
+    attachSortable(el, '.subtask-item', '.drag-handle', (id, beforeId)=>{ moveInArray(t.subtasks, id, beforeId); saveDB(); renderAll(); });
+  });
 }
 
 function taskCardHtml(t, dragDisabled){
@@ -2459,7 +2698,7 @@ function taskCardHtml(t, dragDisabled){
         </div>
         ${t.note ? `<div class="task-note">${esc(t.note)}</div>` : ''}
         <div class="task-meta-row">
-          ${evTask ? `<span class="task-pill event-link" onclick="event.stopPropagation(); openPrevDrawer('${evTask.id}')" title="Apri evento"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>${esc(evTask.name)}</span>` : (t.prevNome ? `<span class="task-pill" style="background:var(--surface-2); color:var(--text-faint);" title="Evento chiuso">${esc(t.prevNome)} · chiuso</span>` : '')}
+          ${evTask ? `<span class="task-pill event-link" onclick="event.stopPropagation(); openPrevDrawer('${evTask.id}')" title="Apri preventivo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>${esc(evTask.name)}${t.voceId && evTask.voci ? (v=>v?' · '+esc(v.name):'')(evTask.voci.find(v=>v.id===t.voceId)) : ''}</span>` : (t.prevNome ? `<span class="task-pill" style="background:var(--surface-2); color:var(--text-faint);" title="Preventivo eliminato">${esc(t.prevNome)}</span>` : '')}
           ${t.priority ? `<span class="task-pill" style="background:${prBg}; color:${prColor};">${esc(t.priority)}</span>` : ''}
           ${t.dueDate ? `<span class="task-pill" style="background:${overdue?'var(--coral-dim)':'var(--surface-2)'}; color:${overdue?'var(--coral)':'var(--text-dim)'};">${overdue?'Scaduto ':''}${fmtDate(t.dueDate)}</span>` : ''}
           ${total ? `<span class="task-pill" style="background:var(--surface-2); color:var(--text-dim);">${done}/${total} sotto-task</span>` : ''}
@@ -2476,11 +2715,13 @@ function taskCardHtml(t, dragDisabled){
     </div>
     ${expanded ? `
     <div class="task-body">
-      <div class="subtask-list">
+      <div class="subtask-list" data-task="${t.id}">
         ${subs.length ? subs.map(st=>`
-          <div class="subtask-item">
+          <div class="subtask-item" data-id="${st.id}">
+            <span class="drag-handle" title="Trascina per riordinare">${ICO_GRIP}</span>
             <input type="checkbox" class="subtask-check" ${st.done?'checked':''} onchange="toggleSubtask('${t.id}','${st.id}')">
             <div class="subtask-text ${st.done?'done':''}">${esc(st.text)}</div>
+            ${evTask ? voceSelectHtml(evTask, st.voceId||'', `setVoceSub('${t.id}','${st.id}', this.value)`, 'mini') : ''}
             <button class="subtask-del" onclick="deleteSubtask('${t.id}','${st.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
           </div>
         `).join('') : `<div class="row-sub" style="padding:4px;">Nessun sotto-task ancora. Suddividi questo lavoro in passi più piccoli.</div>`}
@@ -2576,15 +2817,26 @@ function modalTask(id, presetPrevId){
       </select></div>
       <div class="field"><label>Scadenza (opzionale)</label><input id="f-due" type="date" value="${t?t.dueDate||'':''}"></div>
     </div>
-    <div class="field"><label>Evento collegato</label><select id="f-task-prev">
-      <option value="">Nessuno</option>
-      ${db.preventivati.map(p=>`<option value="${p.id}" ${prevSel===p.id?'selected':''}>${esc(p.name)}${p.date?' · '+fmtDate(p.date):''}</option>`).join('')}
-    </select></div>
+    <div class="field-row">
+      <div class="field"><label>Preventivo collegato</label><select id="f-task-prev" onchange="aggiornaVociTaskModal()">
+        <option value="">Nessuno</option>
+        ${db.preventivati.filter(p=>!isPrevAuto(p)).map(p=>`<option value="${p.id}" ${prevSel===p.id?'selected':''}>${esc(p.name)}${p.cliente?' · '+esc(p.cliente):''}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Voce del preventivo</label><select id="f-task-voce" data-current="${t?t.voceId||'':''}"></select></div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Annulla</button>
       <button class="btn btn-primary" onclick="saveTask('${id||''}')">${isEdit?'Salva':'Aggiungi'}</button>
     </div>
   `);
+  aggiornaVociTaskModal();
+}
+function aggiornaVociTaskModal(){
+  const sel = document.getElementById('f-task-voce'); if(!sel) return;
+  const p = db.preventivati.find(x=>x.id===document.getElementById('f-task-prev').value);
+  const cur = sel.value || sel.dataset.current || '';
+  sel.disabled = !p;
+  sel.innerHTML = `<option value="">${p?'Nessuna voce':'—'}</option>` + (p ? p.voci.map(v=>`<option value="${v.id}" ${cur===v.id?'selected':''}>${esc(v.name)}</option>`).join('') : '');
 }
 function saveTask(id){
   const text = document.getElementById('f-name').value.trim();
@@ -2597,9 +2849,10 @@ function saveTask(id){
   if(id){
     const t = db.tasks.find(x=>x.id===id);
     t.text=text; t.note=note; t.priority=priority; t.dueDate=dueDate;
-    if(prevId!==t.prevId){ t.prevId = prevId; t.prevNome = ev ? ev.name : ''; }
+    if(prevId!==t.prevId){ t.prevId = prevId; t.prevNome = ev ? ev.name : ''; (t.subtasks||[]).forEach(s=>s.voceId=null); }
+    t.voceId = ev ? (document.getElementById('f-task-voce').value || null) : null;
   } else {
-    db.tasks.push({ id:uid(), text, note, priority, dueDate, done:false, subtasks:[], prevId, prevNome: ev?ev.name:'' });
+    db.tasks.push({ id:uid(), text, note, priority, dueDate, done:false, subtasks:[], prevId, prevNome: ev?ev.name:'', voceId: ev ? (document.getElementById('f-task-voce').value||null) : null });
   }
   saveDB(); closeModal(); renderAll(); toast(id?'Task aggiornato.':'Task aggiunto.');
 }
@@ -2982,7 +3235,7 @@ function renderAccount(){
     <div class="section-title">Zona pericolosa</div>
     <div class="card" style="border-color:rgba(255,69,58,0.3);">
       <div class="card-title" style="color:var(--coral);">Elimina account</div>
-      <div class="row-sub" style="margin:6px 0 14px;">Elimina definitivamente il tuo account e tutti i dati salvati (conti, spese, stipendio, obiettivi e tutto il resto). Questa azione non è reversibile.</div>
+      <div class="row-sub" style="margin:6px 0 14px;">Elimina definitivamente il tuo account e tutti i dati salvati (conti, spese, stipendio, preventivi e tutto il resto). Questa azione non è reversibile.</div>
       <button class="btn btn-danger" style="border-color:rgba(255,69,58,0.35);" onclick="modalEliminaAccount()">Elimina il mio account</button>
     </div>
   `;
@@ -3084,7 +3337,7 @@ async function richiediResetPassword(){
 function modalEliminaAccount(){
   openModal(`
     <h3 style="color:var(--coral);">Elimina account</h3>
-    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">Questa azione elimina definitivamente il tuo account e tutti i dati salvati: conti, spese, stipendio, obiettivi e tutto il resto. Non si può annullare.</p>
+    <p style="color:var(--text-dim); font-size:13px; margin-bottom:16px;">Questa azione elimina definitivamente il tuo account e tutti i dati salvati: conti, spese, stipendio, preventivi e tutto il resto. Non si può annullare.</p>
     <div class="field"><label>Password attuale</label><input id="f-acc-pass-elimina" type="password" placeholder="••••••••"></div>
     <div class="chip-check" style="margin:14px 0;"><input type="checkbox" id="f-acc-conferma"><label for="f-acc-conferma" style="cursor:pointer; font-size:13px;">Ho capito, elimina definitivamente il mio account</label></div>
     <div class="login-error" id="acc-error" style="display:none;"></div>
