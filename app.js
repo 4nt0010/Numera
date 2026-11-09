@@ -25,7 +25,7 @@ const {
   db: firestoreDB, doc, getDoc, setDoc, deleteDoc, auth,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
   signOut, updateProfile, sendPasswordResetEmail,
-  updateEmail, updatePassword, deleteUser,
+  verifyBeforeUpdateEmail, updatePassword, deleteUser,
   reauthenticateWithCredential, EmailAuthProvider
 } = window._fb;
 
@@ -664,8 +664,8 @@ function modalGiornoEventi(dataStr){
     <div class="list" style="margin-top:14px;">
       ${evs.map(p=>`
         <div class="row-item clickable" onclick="closeModal(); openPrevDrawer('${p.id}')">
-          <div class="row-icon" style="background:${p.color}1f; color:${p.color};">${esc((p.cliente||p.name).charAt(0).toUpperCase())}</div>
-          <div class="row-main"><div class="row-title">${esc(p.name)}</div><div class="row-sub">${esc(p.cliente||'')} ${statoInfo(p.stato).label}</div></div>
+          <div class="row-icon" style="background:${p.color}1f; color:${p.color};">${esc((p.name||p.cliente||'?').charAt(0).toUpperCase())}</div>
+          <div class="row-main"><div class="row-title">${esc(p.name)}</div><div class="row-sub">${p.cliente?esc(p.cliente)+' · ':''}${statoInfo(p.stato).label}</div></div>
           <div class="row-amount">${euro(prevStats(p).totale)}</div>
         </div>
       `).join('')}
@@ -676,7 +676,7 @@ function modalGiornoEventi(dataStr){
 
 function renderAll(){
   if(!db) return;
-  [ ()=>checkStipendioAutomatico(), ()=>checkPrevisioniScadute(), ()=>checkSpeseFisseAutomatiche(), ()=>checkAcquistiDaRimuovere() ]
+  [ ()=>checkStipendioAutomatico(), ()=>checkPrevisioniScadute(), ()=>checkSpeseFisseAutomatiche(), ()=>checkContiAutomatici(), ()=>checkAcquistiDaRimuovere() ]
     .forEach(fn=>{ try{ fn(); }catch(err){ console.error('Controllo automatico non riuscito:', err); } });
   db.preventivati.forEach(p=>{ try{ migratePrev(p); }catch(err){ console.error('Preventivo non valido:', p, err); } });
   const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderClienti, renderAcquisti, renderTask, renderAccount, renderPrevDrawer];
@@ -831,7 +831,7 @@ function dashBlocks(D){
       ${D.prevSeguire.length ? `<div class="mini-list">${D.prevSeguire.map(p=>{
         const st = prevStats(p), ts = prevTaskStats(p.id), rit = prevInRitardo(p);
         return `<div class="mini-row clickable" onclick="openPrevDrawer('${p.id}')">
-          <div class="mini-dot" style="background:${p.color}22; color:${p.color};">${esc((p.cliente||p.name).charAt(0).toUpperCase())}</div>
+          <div class="mini-dot" style="background:${p.color}22; color:${p.color};">${esc((p.name||p.cliente||'?').charAt(0).toUpperCase())}</div>
           <div class="mini-main">
             <div class="mini-title">${esc(p.name)}</div>
             <div class="mini-sub">${p.stato==='inviato'?'<span style="color:var(--blue-soft)">In attesa di risposta</span>':rit?'<span style="color:var(--coral-soft)">In ritardo · lavoro già svolto</span>':quandoTesto(p.date)}${p.cliente?' · '+esc(p.cliente):''}${ts.n?` · ${ts.fatte}/${ts.n} lavori`:''}</div>
@@ -1059,15 +1059,93 @@ function emptyState(msg){
   return `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M8 15c1 1.2 2.4 2 4 2s3-.8 4-2"/></svg><p>${msg}</p></div>`;
 }
 
-/* ==================== CONTI ==================== */
+/* ==================== CONTI ====================
+   Ogni conto può avere, facoltativi:
+   - un CANONE mensile (es. canone del conto corrente, della carta) → uscita automatica ogni mese;
+   - un TASSO D'INTERESSE (es. buono fruttifero, conto deposito) espresso al mese o all'anno
+     → entrata automatica ogni mese calcolata sul saldo del momento (interesse composto).
+   Come per le spese fisse, la prima applicazione avviene alla PROSSIMA scadenza, mai subito.
+================================================= */
+function tassoMensile(a){
+  const r = Number(a.interesse)||0;
+  if(r<=0) return 0;
+  return a.interessePeriodo==='anno' ? r/100/12 : r/100;
+}
+function tassoAnnuoEquivalente(a){ const m = tassoMensile(a); return m ? (Math.pow(1+m,12)-1)*100 : 0; }
+function fmtPct(n){ return Number(n).toLocaleString('it-IT',{maximumFractionDigits:2}) + '%'; }
+// mese (YYYY-MM) dell'ultima scadenza già "passata": se il giorno di quest'anno non è ancora arrivato, è il mese scorso
+function ultimaScadenzaPassata(giorno){
+  const oggi = new Date();
+  return oggi.getDate() >= giorno ? meseChiave(0) : meseChiave(-1);
+}
+function dataScadenza(mese, giorno){ return `${mese}-${String(giorno).padStart(2,'0')}`; }
+function prossimaScadenza(ultimoMese, giorno){ return dataScadenza(meseSuccessivoChiave(ultimoMese || meseChiave(-1)), giorno); }
+
+function checkContiAutomatici(){
+  if(!db || !session) return;
+  let changed = false;
+  db.accounts.forEach(a=>{
+    // canone mensile
+    if(Number(a.canone)>0){
+      const g = a.canoneGiorno || 1;
+      const limite = ultimaScadenzaPassata(g);
+      if(!a.ultimoCanone) a.ultimoCanone = limite;   // dati vecchi/incompleti: nessun addebito a sorpresa
+      let mese = a.ultimoCanone, guard = 0;
+      while(mese < limite && guard < 36){
+        mese = meseSuccessivoChiave(mese);
+        const imp = Math.round(Number(a.canone)*100)/100;
+        a.balance = Math.round((Number(a.balance) - imp)*100)/100;
+        db.movimenti.push({ id:uid(), type:'uscita', name:`Canone ${a.name}`, amount:imp, date:dataScadenza(mese,g), accountId:a.id, category:'altro', fromCanone:a.id });
+        a.ultimoCanone = mese; changed = true; guard++;
+      }
+    }
+    // interessi (buono fruttifero, conto deposito…)
+    const tm = tassoMensile(a);
+    if(tm>0){
+      const g = a.interesseGiorno || 1;
+      const limite = ultimaScadenzaPassata(g);
+      if(!a.ultimoInteresse) a.ultimoInteresse = limite;
+      let mese = a.ultimoInteresse, guard = 0;
+      while(mese < limite && guard < 36){
+        mese = meseSuccessivoChiave(mese);
+        const imp = Math.round(Math.max(0, Number(a.balance))*tm*100)/100;
+        if(imp>0){
+          a.balance = Math.round((Number(a.balance) + imp)*100)/100;
+          db.movimenti.push({ id:uid(), type:'entrata', name:`Interessi ${a.name}`, amount:imp, date:dataScadenza(mese,g), accountId:a.id, category:'risparmio', fromInteressi:a.id });
+        }
+        a.ultimoInteresse = mese; changed = true; guard++;
+      }
+    }
+  });
+  if(changed) saveDB();
+}
+function contoExtraHtml(a){
+  const righe = [];
+  if(Number(a.canone)>0){
+    righe.push(`<div class="acc-extra-row"><span>Canone</span><b style="color:var(--coral)">− ${euro(Number(a.canone))}/mese</b><small>prossimo addebito ${fmtDate(prossimaScadenza(a.ultimoCanone, a.canoneGiorno||1))}</small></div>`);
+  }
+  const tm = tassoMensile(a);
+  if(tm>0){
+    const prossimo = Math.max(0, Number(a.balance))*tm;
+    const tra12 = Math.max(0, Number(a.balance))*Math.pow(1+tm,12);
+    const tassoTxt = a.interessePeriodo==='anno' ? `${fmtPct(a.interesse)} annuo` : `${fmtPct(a.interesse)} al mese (≈ ${fmtPct(tassoAnnuoEquivalente(a))} annuo)`;
+    righe.push(`<div class="acc-extra-row"><span>Interessi</span><b style="color:var(--mint)">+ ${euro(prossimo)}</b><small>${tassoTxt} · prossimo accredito ${fmtDate(prossimaScadenza(a.ultimoInteresse, a.interesseGiorno||1))}</small></div>`);
+    righe.push(`<div class="acc-extra-row"><span>Fra 1 anno</span><b>≈ ${euro(tra12)}</b><small>se il saldo resta invariato</small></div>`);
+  }
+  return righe.length ? `<div class="acc-extra">${righe.join('')}</div>` : '';
+}
 function renderConti(){
   const f = filters.conti;
-  const total = db.accounts.reduce((s,a)=>s+Number(a.balance),0);
+  const total = db.accounts.reduce((s,a)=>s+Number(a.balance||0),0);
+  const canoni = db.accounts.reduce((s,a)=>s+(Number(a.canone)||0),0);
+  const interessi = db.accounts.reduce((s,a)=>s+Math.max(0,Number(a.balance)||0)*tassoMensile(a),0);
   let list = [...db.accounts];
   if(f.q) list = list.filter(a=> matches(a.name,f.q));
+  const ICO_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>';
+  const ICO_DEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg>';
   document.getElementById('page-conti').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Conti</div><div class="page-sub">${db.accounts.length} sorgenti · totale ${euro(total)}</div></div>
+      <div><div class="page-title">Conti</div><div class="page-sub">${plur(db.accounts.length,'sorgente','sorgenti')} · totale ${euro(total)}${canoni?` · canoni −${euro(canoni)}/mese`:''}${interessi?` · interessi ≈ +${euro(interessi)}/mese`:''}</div></div>
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalAccount()">+ Nuovo conto</button></div>
     </div>
     ${db.accounts.length>3 ? searchBar('conti','Cerca conto...') : ''}
@@ -1077,28 +1155,55 @@ function renderConti(){
           <div style="display:flex; justify-content:space-between; align-items:flex-start;">
             <div class="row-icon" style="background:${a.color}22; color:${a.color};">${esc(a.icon||a.name.charAt(0))}</div>
             <div class="row-actions">
-              <button class="icon-btn" onclick="modalAccount('${a.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg></button>
-              <button class="icon-btn btn-danger" onclick="deleteItem('accounts','${a.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg></button>
+              <button class="icon-btn" title="Modifica" onclick="modalAccount('${a.id}')">${ICO_EDIT}</button>
+              <button class="icon-btn btn-danger" title="Elimina" onclick="deleteItem('accounts','${a.id}')">${ICO_DEL}</button>
             </div>
           </div>
           <div class="card-title" style="margin-top:14px;">${esc(a.name)}</div>
-          <div class="stat-value">${euro(a.balance)}</div>
+          <div class="stat-value">${euro(Number(a.balance)||0)}</div>
+          ${contoExtraHtml(a)}
         </div>
       `).join('')}
-      ${list.length || !f.q ? `<div class="card" style="display:flex; align-items:center; justify-content:center; border-style:dashed; cursor:pointer; color:var(--text-faint);" onclick="modalAccount()">
+      ${list.length || !f.q ? `<div class="card" style="display:flex; align-items:center; justify-content:center; border-style:dashed; cursor:pointer; color:var(--text-faint); min-height:120px;" onclick="modalAccount()">
         + Aggiungi sorgente
       </div>` : ''}
     </div>
   `;
 }
+function giornoOptions(sel){ return Array.from({length:28},(_,i)=>i+1).map(g=>`<option value="${g}" ${g===(sel||1)?'selected':''}>${g}</option>`).join(''); }
 function modalAccount(id){
   const isEdit = !!id;
   const a = isEdit ? db.accounts.find(x=>x.id===id) : null;
+  if(isEdit && !a) return;
+  const oggiG = Math.min(28, new Date().getDate());
   openModal(`
     <h3>${isEdit?'Modifica conto':'Nuovo conto'}</h3>
-    <div class="field"><label>Nome</label><input id="f-name" value="${a?esc(a.name):''}" placeholder="Es. Carta N26"></div>
-    <div class="field"><label>Saldo attuale (€)</label><input id="f-balance" type="text" inputmode="decimal" autocomplete="off" value="${a?a.balance:''}" placeholder="0,00"></div>
+    <div class="field"><label>Nome</label><input id="f-name" value="${a?esc(a.name):''}" placeholder="Es. Carta N26, Buono fruttifero"></div>
+    <div class="field"><label>Saldo attuale (€)</label><input id="f-balance" type="number" step="0.01" value="${a?a.balance:''}" placeholder="0.00"></div>
     ${isEdit ? `<p style="color:var(--text-faint); font-size:11.5px; margin:-8px 0 12px;">Se cambi il saldo, l'app registra da sola un movimento di rettifica per tenere tutto coerente.</p>` : ''}
+
+    <div class="acc-form-section">
+      <div class="acc-form-title">Canone mensile <span>facoltativo</span></div>
+      <div class="field-row">
+        <div class="field"><label>Importo (€ al mese)</label><input id="f-canone" type="number" step="0.01" min="0" value="${a&&Number(a.canone)>0?a.canone:''}" placeholder="Nessuno"></div>
+        <div class="field"><label>Giorno di addebito</label><select id="f-canone-giorno">${giornoOptions(a?a.canoneGiorno:oggiG)}</select></div>
+      </div>
+    </div>
+
+    <div class="acc-form-section">
+      <div class="acc-form-title">Interessi <span>es. buono fruttifero, conto deposito</span></div>
+      <div class="field-row">
+        <div class="field"><label>Tasso (%)</label><input id="f-interesse" type="text" inputmode="decimal" autocomplete="off" value="${a&&Number(a.interesse)>0?a.interesse:''}" placeholder="Es. 2" oninput="anteprimaInteressi()"></div>
+        <div class="field"><label>Calcolato</label><select id="f-interesse-periodo" onchange="anteprimaInteressi()">
+          <option value="mese" ${!a||a.interessePeriodo!=='anno'?'selected':''}>al mese</option>
+          <option value="anno" ${a&&a.interessePeriodo==='anno'?'selected':''}>all'anno</option>
+        </select></div>
+      </div>
+      <div class="field"><label>Giorno di accredito</label><select id="f-interesse-giorno">${giornoOptions(a?a.interesseGiorno:oggiG)}</select></div>
+      <div class="acc-form-hint" id="anteprima-interessi"></div>
+    </div>
+    <p style="color:var(--text-faint); font-size:11.5px; margin:4px 0 12px;">Canone e interessi vengono registrati da soli in "Movimenti" ogni mese, a partire dalla prossima scadenza (non subito). Gli interessi si calcolano sul saldo del momento, quindi crescono insieme al conto.</p>
+
     <div class="field"><label>Colore</label>
       <div class="color-picker">${ICON_COLORS.map(c=>`<div class="color-swatch ${a&&a.color===c?'selected':''}" style="background:${c}" data-color="${c}" onclick="selectColor(this)"></div>`).join('')}</div>
     </div>
@@ -1107,33 +1212,62 @@ function modalAccount(id){
       <button class="btn btn-primary" onclick="saveAccount('${id||''}')">${isEdit?'Salva':'Crea'}</button>
     </div>
   `);
-  if(!a) setTimeout(()=>document.querySelector('.color-swatch').classList.add('selected'),0);
+  if(!a || !ICON_COLORS.includes(a.color)) setTimeout(()=>document.querySelector('.color-swatch')?.classList.add('selected'),0);
+  anteprimaInteressi();
+}
+function anteprimaInteressi(){
+  const box = document.getElementById('anteprima-interessi'); if(!box) return;
+  const r = parseNum(document.getElementById('f-interesse').value)||0;
+  const periodo = document.getElementById('f-interesse-periodo').value;
+  const saldo = parseNum(document.getElementById('f-balance').value)||0;
+  if(r<=0){ box.textContent = ''; return; }
+  const finto = { interesse:r, interessePeriodo:periodo };
+  const tm = tassoMensile(finto);
+  const annuo = tassoAnnuoEquivalente(finto);
+  box.innerHTML = `${periodo==='mese'?`≈ ${fmtPct(annuo)} all'anno con l'interesse composto. `:''}${saldo>0?`Con ${euro(saldo)}: circa <b>+${euro(saldo*tm)}</b> il prossimo mese, <b>${euro(saldo*Math.pow(1+tm,12))}</b> tra 12 mesi.`:''}`;
 }
 function selectColor(el){ el.parentElement.querySelectorAll('.color-swatch').forEach(s=>s.classList.remove('selected')); el.classList.add('selected'); }
 function saveAccount(id){
   const name = document.getElementById('f-name').value.trim();
-  const balance = parseNum(document.getElementById('f-balance').value)||0;
+  const balance = Math.round((parseNum(document.getElementById('f-balance').value)||0)*100)/100;
   const colorEl = document.querySelector('.color-swatch.selected');
   const color = colorEl ? colorEl.dataset.color : ICON_COLORS[0];
+  const canone = Math.max(0, parseNum(document.getElementById('f-canone').value)||0);
+  const canoneGiorno = parseInt(document.getElementById('f-canone-giorno').value)||1;
+  const interesse = Math.max(0, parseNum(document.getElementById('f-interesse').value)||0);
+  const interessePeriodo = document.getElementById('f-interesse-periodo').value==='anno' ? 'anno' : 'mese';
+  const interesseGiorno = parseInt(document.getElementById('f-interesse-giorno').value)||1;
   if(!name) return toast('Inserisci un nome.');
+  if(interessePeriodo==='mese' && interesse>20) return toast('Un tasso mensile così alto sembra un errore: controlla (forse è annuo?).');
+  let a;
   if(id){
-    const a = db.accounts.find(x=>x.id===id);
+    a = db.accounts.find(x=>x.id===id); if(!a) return;
     const saldoPrecedente = Number(a.balance)||0;
     a.name=name; a.balance=balance; a.color=color; a.icon = name.slice(0,2).toUpperCase();
     const delta = balance - saldoPrecedente;
     if(Math.abs(delta) > 0.004){
       db.movimenti.push({
         id:uid(), type: delta>0 ? 'entrata' : 'uscita', name:'Rettifica saldo',
-        amount: Math.abs(delta), date: oggiStr(),
+        amount: Math.round(Math.abs(delta)*100)/100, date: oggiStr(),
         accountId: id, category:'altro', rettifica:true
       });
     }
   } else {
-    db.accounts.push({ id:uid(), name, balance, color, icon:name.slice(0,2).toUpperCase() });
+    a = { id:uid(), name, balance, color, icon:name.slice(0,2).toUpperCase() };
+    db.accounts.push(a);
   }
+  // canone: se viene attivato ora o cambia giorno, parte dalla prossima scadenza
+  if(canone>0){
+    if(!(Number(a.canone)>0) || a.canoneGiorno!==canoneGiorno) a.ultimoCanone = ultimaScadenzaPassata(canoneGiorno);
+    a.canone = canone; a.canoneGiorno = canoneGiorno;
+  } else { delete a.canone; delete a.canoneGiorno; delete a.ultimoCanone; }
+  // interessi: stessa logica
+  if(interesse>0){
+    if(!(Number(a.interesse)>0) || a.interesseGiorno!==interesseGiorno) a.ultimoInteresse = ultimaScadenzaPassata(interesseGiorno);
+    a.interesse = interesse; a.interessePeriodo = interessePeriodo; a.interesseGiorno = interesseGiorno;
+  } else { delete a.interesse; delete a.interessePeriodo; delete a.interesseGiorno; delete a.ultimoInteresse; }
   saveDB(); closeModal(); renderAll(); toast('Conto salvato.');
 }
-
 /* ==================== SPESE (movimenti che aggiornano il saldo in automatico) ==================== */
 let chartCategorie;
 function applyMovimentoEffect(m, sign){
@@ -1153,7 +1287,7 @@ function applyMovimentoEffect(m, sign){
 function renderSpese(){
   const f = filters.spese;
   const meseCorrente = meseKeyFromDate(new Date());
-  const delMese = db.movimenti.filter(m=> (m.date||'').slice(0,7)===meseCorrente);
+  const delMese = db.movimenti.filter(m=> (m.date||'').slice(0,7)===meseCorrente && !m.rettifica);
   const usciteMese = delMese.filter(m=>m.type==='uscita').reduce((s,m)=>s+Number(m.amount),0);
   const entrateMese = delMese.filter(m=>m.type==='entrata').reduce((s,m)=>s+Number(m.amount),0);
 
@@ -1351,7 +1485,7 @@ function saveMovimento(id){
   const type = document.querySelector('input[name="f-mov-tipo"]:checked').value;
   const name = document.getElementById('f-mov-name').value.trim();
   const amount = Math.round(parseNum(document.getElementById('f-mov-amount').value)*100)/100;
-  const date = document.getElementById('f-mov-date').value;
+  const date = document.getElementById('f-mov-date').value || oggiStr();
   if(!name) return toast('Inserisci una descrizione.');
   if(amount<=0) return toast('Inserisci un importo maggiore di zero.');
 
@@ -1370,6 +1504,7 @@ function saveMovimento(id){
 
   if(id){
     const m = db.movimenti.find(x=>x.id===id);
+    if(!m) return toast('Movimento non trovato.');
     applyMovimentoEffect(m, -1);
     // rimuove i campi del tipo precedente per non lasciare valori vuoti sul vecchio tipo
     delete m.accountId; delete m.category; delete m.fromAccountId; delete m.toAccountId;
@@ -1436,6 +1571,15 @@ function ultimoGiornoMese(mese){
   const giorno = new Date(y, m, 0).getDate();
   return `${mese}-${String(giorno).padStart(2,'0')}`;
 }
+// aggiorna le previsioni del mese quando cambiano nome, base o eccezioni dello stipendio
+function sincronizzaPrevisioniStipendio(st){
+  db.previsioni.forEach(p=>{
+    if(p.fromStipendioId!==st.id) return;
+    p.amount = stipendioPerMese(st, p.fromStipendioMese);
+    p.name = `${st.nome} ${fmtMese(p.fromStipendioMese)}`;
+  });
+  db.previsioni = db.previsioni.filter(p=> p.fromStipendioId!==st.id || Number(p.amount)>0);
+}
 function checkStipendioAutomatico(){
   if(!db || !session || !db.stipendi) return;
   const meseScorso = meseChiave(-1);
@@ -1449,7 +1593,8 @@ function checkStipendioAutomatico(){
     // (capita quando questa fonte di stipendio viene configurata per la prima volta, senza storico)
     const giaInMancanti = db.mancanti.some(m=>m.fromStipendioId===st.id && m.fromStipendioMese===meseScorso);
     const giaInPreventivati = db.previsioni.some(p=>p.fromStipendioId===st.id && p.fromStipendioMese===meseScorso);
-    const giaRicevuto = st.ricevuti.includes(meseScorso);
+    // "saltati": stime eliminate a mano da "Da ricevere", che non devono ricomparire
+    const giaRicevuto = st.ricevuti.includes(meseScorso) || (st.saltati||[]).includes(meseScorso);
     if(!giaInMancanti && !giaInPreventivati && !giaRicevuto){
       const stima = stipendioPerMese(st, meseScorso);
       if(stima>0){
@@ -1495,7 +1640,7 @@ function riempiMesiMancanti(st, ultimoAccreditato){
   let cursore = meseSuccessivoChiave(ultimoAccreditato);
   let guard = 0;
   while(cursore <= meseScorso && guard<36){
-    const giaPresente = st.ricevuti.includes(cursore) || db.mancanti.some(m=>m.fromStipendioId===st.id && m.fromStipendioMese===cursore);
+    const giaPresente = st.ricevuti.includes(cursore) || (st.saltati||[]).includes(cursore) || db.mancanti.some(m=>m.fromStipendioId===st.id && m.fromStipendioMese===cursore);
     if(!giaPresente){
       const stima = stipendioPerMese(st, cursore);
       if(stima>0){
@@ -1618,8 +1763,29 @@ function creaStipendio(){
   saveDB(); closeModal(); renderAll(); toast('Stipendio creato.');
 }
 function deleteStipendio(id){
+  const st = db.stipendi.find(x=>x.id===id); if(!st) return;
+  const nMan = db.mancanti.filter(m=>m.fromStipendioId===id).length;
+  openModal(`
+    <h3>Eliminare "${esc(st.nome)}"?</h3>
+    <p class="modal-lead">Verrà tolta anche la previsione automatica di questo mese.${nMan?` ${plur(nMan,'stima già in "Da ricevere" resta','stime già in "Da ricevere" restano')} lì: eliminala a mano se non ti serve.`:''}</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-danger-solid" onclick="confermaEliminaStipendio('${id}')">Elimina</button>
+    </div>
+  `);
+}
+function confermaEliminaStipendio(id){
+  const idx = db.stipendi.findIndex(x=>x.id===id); if(idx<0) return;
+  const st = db.stipendi[idx];
+  const previsioniTolte = db.previsioni.filter(p=>p.fromStipendioId===id);
   db.stipendi = db.stipendi.filter(x=>x.id!==id);
-  saveDB(); renderAll(); toast('Stipendio eliminato.');
+  db.previsioni = db.previsioni.filter(p=>p.fromStipendioId!==id);
+  saveDB(); closeModal(); renderAll();
+  toast('Stipendio eliminato.', { label:'Annulla', fn:()=>{
+    db.stipendi.splice(Math.min(idx, db.stipendi.length), 0, st);
+    db.previsioni.push(...previsioniTolte);
+    saveDB(); renderAll(); toast('Ripristinato.');
+  }});
 }
 function modalStipendioBase(stipendioId){
   const st = db.stipendi.find(x=>x.id===stipendioId);
@@ -1650,6 +1816,7 @@ function saveStipendioBase(stipendioId){
   if(!nome) return toast('Inserisci un nome.');
   st.nome = nome;
   st.base = amount;
+  sincronizzaPrevisioniStipendio(st);
   if(ultimo){
     if(!st.ricevuti.includes(ultimo)) st.ricevuti.push(ultimo);
     riempiMesiMancanti(st, ultimo);
@@ -1690,12 +1857,14 @@ function saveEccezione(stipendioId, id){
     if(existing){ existing.amount = amount; existing.note = note; }
     else st.eccezioni.push({ id:uid(), mese, amount, note });
   }
+  sincronizzaPrevisioniStipendio(st);
   saveDB(); closeModal(); renderAll(); toast('Eccezione salvata.');
 }
 function deleteEccezione(stipendioId, id){
   const st = db.stipendi.find(x=>x.id===stipendioId);
   if(!st) return;
   st.eccezioni = st.eccezioni.filter(x=>x.id!==id);
+  sincronizzaPrevisioniStipendio(st);
   saveDB(); renderAll(); toast('Eliminata.');
 }
 
@@ -1939,7 +2108,7 @@ function renderPreventivati(){
       <div class="filter-bar">
         ${calOn ? '<div style="flex:1"></div>' : `<div class="search-input">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-          <input id="search-preventivati" type="search" enterkeyhint="search" autocomplete="off" value="${esc(f.q)}" placeholder="Cerca cliente, numero o voce…" oninput="setFilter('preventivati','q',this.value)" aria-label="Cerca preventivi">
+          <input id="search-preventivati" type="search" enterkeyhint="search" autocomplete="off" value="${esc(f.q)}" placeholder="Cerca evento, cliente, numero o voce…" oninput="setFilter('preventivati','q',this.value)" aria-label="Cerca preventivi">
         </div>`}
         <button class="btn ${calOn?'btn-primary':''}" onclick="setVistaCalendario('preventivati', ${!calOn})" aria-pressed="${calOn}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>${calOn?'Chiudi calendario':'Calendario'}</button>
       </div>
@@ -1972,10 +2141,10 @@ function prevCardHtml(p){
   if(p.importato) badges.push(`<span class="pv-badge amber">Da rivedere</span>`);
   return `<button class="pv-card ${late?'late':''}" onclick="openPrevDrawer('${p.id}')">
     <div class="pv-card-top">
-      <div class="pv-avatar" style="background:${p.color}22; color:${p.color};">${esc((p.cliente||p.name).charAt(0).toUpperCase())}</div>
+      <div class="pv-avatar" style="background:${p.color}22; color:${p.color};">${esc((p.name||p.cliente||'?').charAt(0).toUpperCase())}</div>
       <div class="pv-titles">
         <div class="pv-name">${esc(p.name)}</div>
-        <div class="pv-meta">${esc(p.cliente||'Nessun cliente')} · ${esc(p.numero||'')}</div>
+        <div class="pv-meta">${esc(p.cliente||'Nessun cliente')}${p.numero?' · '+esc(p.numero):''}</div>
       </div>
     </div>
     <div class="pv-amount-row">
@@ -2055,10 +2224,10 @@ function renderPrevDrawer(resetScroll){
 
   drawer.innerHTML = `
     <div class="dr-head">
-      <div class="pv-avatar lg" style="background:${p.color}22; color:${p.color};">${esc((p.cliente||p.name).charAt(0).toUpperCase())}</div>
+      <div class="pv-avatar lg" style="background:${p.color}22; color:${p.color};">${esc((p.name||p.cliente||'?').charAt(0).toUpperCase())}</div>
       <div class="dr-head-main">
         <div class="dr-title">${esc(p.name)}</div>
-        <div class="dr-sub">${esc(p.numero||'')} · ${p.cliente ? `<button onclick="apriCliente(${jsArg(p.cliente)})">${esc(p.cliente)}</button>` : 'Nessun cliente'}</div>
+        <div class="dr-sub">${p.cliente ? `<button onclick="apriCliente(${jsArg(p.cliente)})">${esc(p.cliente)}</button>` : 'Nessun cliente'}${p.numero?' · '+esc(p.numero):''}</div>
       </div>
       <div class="dr-menu-wrap">
         <button class="icon-btn" aria-label="Altre azioni" onclick="toggleDrMenu(event)">${ICO_DOTS}</button>
@@ -2281,8 +2450,8 @@ function testoPreventivo(p){
     if(v.desc) righe.push(`   ${v.desc}`);
   });
   const out = [
-    `Preventivo ${p.numero||''}${p.cliente?' per '+p.cliente:''}`.trim(),
-    p.name,
+    p.numero ? `Preventivo ${p.numero} · ${p.name}` : `Preventivo · ${p.name}`,
+    p.cliente ? `Cliente: ${p.cliente}` : null,
     p.date ? `Data: ${new Date(p.date+'T00:00:00').toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'})}` : null,
     '',
     ...righe,
@@ -2368,8 +2537,8 @@ function modalPreventivato(id, presetCliente){
   openModal(`
     <h3>${isEdit?'Modifica preventivo':'Nuovo preventivo'}</h3>
     ${p && p.importato ? `<div class="dr-alert amber" style="margin:8px 0 4px;">${ICO_ALERT}<span>Arriva dalla vecchia sezione Eventi: aggiungi il cliente e, se vuoi, dividi l'importo in più voci.</span></div>` : ''}
+    <div class="field"><label for="f-name">Nome dell'evento</label><input id="f-name" value="${esc(p?p.name:'')}" placeholder="Es. Matrimonio Rossi" autocapitalize="sentences"></div>
     <div class="field"><label for="f-cliente">Cliente</label><input id="f-cliente" list="dl-clienti" value="${esc(p?p.cliente||'':presetCliente||'')}" placeholder="Es. Marco Rossi" autocomplete="off" autocapitalize="words"><datalist id="dl-clienti">${clienti.map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
-    <div class="field"><label for="f-name">Titolo del lavoro</label><input id="f-name" value="${esc(p?p.name:'')}" placeholder="Es. Servizio fotografico matrimonio" autocapitalize="sentences"></div>
     <div class="field"><label for="f-date">Data del lavoro</label><input id="f-date" type="date" value="${p?p.date||'':''}"></div>
     ${isEdit ? '' : `<div class="field"><label>A che punto sei?</label>
       <div class="segmented">
@@ -2454,7 +2623,7 @@ function rimuoviVoceDraft(vid){
 function savePreventivato(id){
   const name = document.getElementById('f-name').value.trim();
   const cliente = document.getElementById('f-cliente').value.trim();
-  if(!name){ document.getElementById('f-name').focus(); return toast('Dai un titolo al lavoro.'); }
+  if(!name){ document.getElementById('f-name').focus(); return toast("Inserisci il nome dell'evento."); }
   const voci = prevDraft
     .map(v=>({ id:v.id, name:String(v.name||'').trim(), desc:String(v.desc||'').trim(), qty: v.qty===''||v.qty===undefined ? 1 : parseNum(v.qty), price: parseNum(v.price)||0 }))
     .filter(v=> v.name || v.price>0)
@@ -2768,7 +2937,7 @@ function renderMancanti(){
       ${listPrev.length ? listPrev.map(p=>{
         const st = prevStats(p);
         return `<div class="row-item clickable" onclick="openPrevDrawer('${p.id}','pagamenti')">
-          <div class="row-icon" style="background:var(--coral-dim); color:var(--coral-soft);">${esc((p.cliente||p.name).charAt(0).toUpperCase())}</div>
+          <div class="row-icon" style="background:var(--coral-dim); color:var(--coral-soft);">${esc((p.name||p.cliente||'?').charAt(0).toUpperCase())}</div>
           <div class="row-main">
             <div class="row-title">${esc(p.name)}</div>
             <div class="row-sub">${p.cliente?esc(p.cliente)+' · ':''}${esc(quandoTesto(p.date).toLowerCase())}${st.incassato?` · ricevuti ${euro(st.incassato)} di ${euro(st.totale)}`:''}</div>
@@ -2889,12 +3058,13 @@ function fmtMeseNome(n){
 }
 function renderFisse(){
   const filt = filters.fisse;
-  const mensile = db.fisse.reduce((s,f)=> s + (f.frequency==='annuale'? f.amount/12 : f.amount), 0);
+  const conCanone = db.accounts.filter(a=>Number(a.canone)>0);
+  const mensile = db.fisse.reduce((s,f)=> s + (f.frequency==='annuale'? Number(f.amount)/12 : Number(f.amount)), 0) + conCanone.reduce((s,a)=>s+Number(a.canone),0);
   let list = [...db.fisse];
   if(filt.q) list = list.filter(x=> matches(x.name, filt.q));
   document.getElementById('page-fisse').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Spese fisse ricorrenti</div><div class="page-sub">${db.fisse.length} voci · impatto mensile ${euro(mensile)}</div></div>
+      <div><div class="page-title">Spese fisse ricorrenti</div><div class="page-sub">${plur(db.fisse.length + conCanone.length,'voce','voci')} · impatto mensile ${euro(mensile)}</div></div>
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalFissa()">+ Aggiungi</button></div>
     </div>
     ${searchBar('fisse','Cerca spesa fissa...')}
@@ -2917,6 +3087,14 @@ function renderFisse(){
         </div>`;
       }).join('') : emptyState(db.fisse.length ? 'Nessuna spesa fissa corrisponde alla ricerca.' : 'Nessuna spesa fissa registrata.')}
     </div>
+    ${conCanone.length ? `
+    <div class="section-title">Canoni dei conti <span class="count">si modificano da Conti</span></div>
+    <div class="list">${conCanone.map(a=>`
+      <div class="row-item" style="cursor:pointer;" onclick="modalAccount('${a.id}')">
+        <div class="row-icon" style="background:${a.color}22; color:${a.color};">${esc(a.icon||a.name.charAt(0))}</div>
+        <div class="row-main"><div class="row-title">Canone ${esc(a.name)}</div><div class="row-sub">Mensile · il giorno ${a.canoneGiorno||1} di ogni mese · addebito automatico</div></div>
+        <div class="row-amount" style="color:var(--amber)">${euro(Number(a.canone))}</div>
+      </div>`).join('')}</div>` : ''}
   `;
 }
 function toggleFissaFreq(freq){
@@ -2966,11 +3144,14 @@ function saveFissa(id){
   if(id){
     const f=db.fisse.find(x=>x.id===id);
     const contoAppenaCollegato = accountId && !f.accountId;
+    const scadenzaCambiata = f.frequency!==frequency || (f.giorno||1)!==giorno || (frequency==='annuale' && (f.mese||1)!==mese);
     f.name=name; f.amount=amount; f.frequency=frequency; f.giorno=giorno;
     if(mese) f.mese=mese; else delete f.mese;
     if(accountId) f.accountId=accountId; else delete f.accountId;
     // se il conto viene collegato ora (o cambia frequenza), evita un addebito a sorpresa per il periodo in corso
-    if(contoAppenaCollegato) f.ultimoAddebito = periodoCorrente;
+    // ultimoAddebito ha formato diverso tra mensile ("AAAA-MM") e annuale ("AAAA"): senza questo,
+    // passare da mensile ad annuale faceva scattare un secondo addebito nello stesso periodo
+    if(accountId && (contoAppenaCollegato || scadenzaCambiata)) f.ultimoAddebito = periodoCorrente;
   } else {
     const nuova = { id:uid(), name, amount, frequency, giorno };
     if(mese) nuova.mese = mese;
@@ -3244,7 +3425,7 @@ function saveTask(id){
   }
   saveDB(); closeModal(); renderAll(); toast(id?'Task aggiornato.':'Task aggiunto.');
 }
-function toggleTask(id){ const t=db.tasks.find(x=>x.id===id); t.done=!t.done; saveDB(); renderTask(); updateBadge(); }
+function toggleTask(id){ const t=db.tasks.find(x=>x.id===id); if(!t) return; t.done=!t.done; saveDB(); renderTask(); updateBadge(); }
 
 function addSubtask(taskId){
   const input = document.getElementById('subtask-input-'+taskId);
@@ -3312,7 +3493,7 @@ function renderAcquisti(){
         } else subRow = '';
         return `
         <div class="row-item" style="${a.bought?'opacity:.65;':''} flex-wrap:wrap;">
-          <div class="chip-check"><input type="checkbox" ${a.bought?'checked':''} onchange="toggleAcquisto('${a.id}')" ${inRiflessione&&!scaduta?'disabled title="Rifletti ancora prima di comprarlo"':''}></div>
+          <div class="chip-check"><input type="checkbox" ${a.bought?'checked':''} onchange="toggleAcquisto('${a.id}')" ${a.speseRegistrata?'disabled title="Già registrato come spesa"':inRiflessione&&!scaduta?'disabled title="Rifletti ancora prima di comprarlo"':''}></div>
           <div class="row-main">
             <div class="row-title" style="${a.bought?'text-decoration:line-through;':''}">${esc(a.name)}${qty>1?` <span style="color:var(--text-faint); font-weight:500;">× ${qty}</span>`:''}</div>
             ${subRow}
@@ -3414,7 +3595,7 @@ function saveAcquisto(id){
   }
   saveDB(); closeModal(); renderAll(); toast(id?'Articolo aggiornato.':'Aggiunto alla lista.');
 }
-function toggleAcquisto(id){ const a=db.acquisti.find(x=>x.id===id); a.bought=!a.bought; saveDB(); renderAcquisti(); }
+function toggleAcquisto(id){ const a=db.acquisti.find(x=>x.id===id); if(!a || a.speseRegistrata) return; a.bought=!a.bought; saveDB(); renderAcquisti(); }
 
 function modalRiflessione(id){
   const a = db.acquisti.find(x=>x.id===id);
@@ -3676,9 +3857,12 @@ async function salvaEmail(){
   errBox.style.display='none';
   if(!nuovaEmail || !passwordCorrente) return toast('Compila tutti i campi.');
   try{
+    if(nuovaEmail.toLowerCase()===(auth.currentUser.email||'').toLowerCase()) return toast("È già l'email attuale.");
     await reauthenticate(passwordCorrente);
-    await updateEmail(auth.currentUser, nuovaEmail);
-    closeModal(); renderAccount(); toast('Email aggiornata.');
+    // updateEmail viene rifiutata dai progetti Firebase con la protezione email attiva (default):
+    // si manda un link alla nuova email e il cambio avviene quando lo apri
+    await verifyBeforeUpdateEmail(auth.currentUser, nuovaEmail);
+    closeModal(); renderAccount(); toast(`Ti ho mandato un link a ${nuovaEmail}: aprilo per confermare il cambio.`);
   }catch(err){
     console.error(err);
     errBox.textContent = friendlyAuthError(err.code);
@@ -3777,12 +3961,16 @@ function deleteItem(collection, id){
 function eliminaDavvero(collection, id){
   const arr = db[collection]; const idx = arr.findIndex(x=>x.id===id); if(idx<0) return;
   const item = arr[idx];
+  // una stima di stipendio eliminata a mano non deve ricomparire al prossimo avvio
+  const stSaltato = collection==='mancanti' && item.fromStipendioId ? db.stipendi.find(x=>x.id===item.fromStipendioId) : null;
+  if(stSaltato){ stSaltato.saltati = stSaltato.saltati || []; if(!stSaltato.saltati.includes(item.fromStipendioMese)) stSaltato.saltati.push(item.fromStipendioMese); }
   const taskLegate = collection==='preventivati' ? prevTasks(id).map(t=>({ t, prevId:t.prevId, voceId:t.voceId })) : [];
   if(collection==='preventivati') scollegaTaskEvento(id);
   db[collection] = arr.filter(x=>x.id!==id);
   saveDB(); renderAll();
   toast(`${NOMI_COLLEZIONE[collection]||'Elemento'} eliminato.`, { label:'Annulla', fn:()=>{
     db[collection].splice(Math.min(idx, db[collection].length), 0, item);
+    if(stSaltato) stSaltato.saltati = (stSaltato.saltati||[]).filter(m=>m!==item.fromStipendioMese);
     taskLegate.forEach(x=>{ x.t.prevId = x.prevId; x.t.voceId = x.voceId; });
     saveDB(); renderAll(); toast('Ripristinato.');
   }});

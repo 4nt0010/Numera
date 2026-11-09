@@ -352,6 +352,18 @@ button.kpi-cell:hover{ background:rgba(255,255,255,0.03); }
 .color-picker{ display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; }
 .color-swatch{ width:30px; height:30px; border-radius:50%; cursor:pointer; border:2px solid transparent; }
 .color-swatch.selected{ border-color:var(--text); box-shadow:0 0 0 2px var(--panel-bg) inset; }
+/* ===== Conti: canone e interessi ===== */
+.acc-form-section{ border:1px solid var(--border-soft); border-radius:14px; padding:12px 14px 2px; margin-bottom:14px; }
+.acc-form-title{ font-size:12.5px; font-weight:700; margin-bottom:10px; color:var(--text); }
+.acc-form-title span{ font-weight:500; color:var(--text-faint); margin-left:6px; }
+.acc-form-hint{ font-size:12px; color:var(--text-dim); margin:-6px 0 12px; line-height:1.5; }
+.acc-form-hint:empty{ display:none; }
+.acc-extra{ margin-top:12px; padding-top:10px; border-top:1px solid var(--border-soft); display:flex; flex-direction:column; gap:7px; }
+.acc-extra-row{ display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:8px; align-items:baseline; font-size:12.5px; }
+.acc-extra-row span{ color:var(--text-faint); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.acc-extra-row b{ text-align:right; font-family:var(--font-mono); font-weight:700; white-space:nowrap; }
+@media (max-width:900px){ .acc-extra-row{ font-size:11.5px; } .acc-extra-row small{ font-size:10.5px; } }
+.acc-extra-row small{ grid-column:1 / -1; color:var(--text-faint); font-size:11px; }
 .chip-check{ display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px; }
 .chip-check input[type=checkbox], .chip-check input[type=radio]{ width:18px; height:18px; accent-color:var(--mint); cursor:pointer; flex-shrink:0; }
 .check-line{ display:flex; align-items:flex-start; gap:10px; font-size:12.5px; color:var(--text-dim); line-height:1.45; cursor:pointer; padding:10px 12px; border-radius:12px; background:var(--surface); }
@@ -1218,7 +1230,7 @@ button.pv-sum:hover{ border-color:rgba(255,255,255,0.14); }
     getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence,
     createUserWithEmailAndPassword, signInWithEmailAndPassword,
     signOut, updateProfile, sendPasswordResetEmail,
-    updateEmail, updatePassword, deleteUser,
+    verifyBeforeUpdateEmail, updatePassword, deleteUser,
     reauthenticateWithCredential, EmailAuthProvider
   } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 
@@ -1241,7 +1253,7 @@ button.pv-sum:hover{ border-color:rgba(255,255,255,0.14); }
     db: firestoreDB, doc, getDoc, setDoc, deleteDoc, auth,
     createUserWithEmailAndPassword, signInWithEmailAndPassword,
     signOut, updateProfile, sendPasswordResetEmail,
-    updateEmail, updatePassword, deleteUser,
+    verifyBeforeUpdateEmail, updatePassword, deleteUser,
     reauthenticateWithCredential, EmailAuthProvider
   };
   window._fbReady = new Promise((resolve) => {
