@@ -1066,13 +1066,61 @@ function emptyState(msg){
      → entrata automatica ogni mese calcolata sul saldo del momento (interesse composto).
    Come per le spese fisse, la prima applicazione avviene alla PROSSIMA scadenza, mai subito.
 ================================================= */
+// i tassi sono piccoli (es. 0.005 al giorno): parseNum leggerebbe "0.005" come cinque (separatore delle migliaia)
+function parsePct(v){ const n = parseFloat(String(v==null?'':v).trim().replace('%','').replace(',', '.')); return isFinite(n) && n>0 ? n : 0; }
+const GIORNI_MESE_MEDI = 365/12;
+function tassoGiornaliero(a){ const r = Number(a.interesse)||0; return r>0 && a.interessePeriodo==='giorno' ? r/100 : 0; }
 function tassoMensile(a){
   const r = Number(a.interesse)||0;
   if(r<=0) return 0;
+  if(a.interessePeriodo==='giorno') return Math.pow(1+r/100, GIORNI_MESE_MEDI) - 1;   // equivalente mensile (composto)
   return a.interessePeriodo==='anno' ? r/100/12 : r/100;
 }
-function tassoAnnuoEquivalente(a){ const m = tassoMensile(a); return m ? (Math.pow(1+m,12)-1)*100 : 0; }
-function fmtPct(n){ return Number(n).toLocaleString('it-IT',{maximumFractionDigits:2}) + '%'; }
+function tassoAnnuoEquivalente(a){
+  const r = Number(a.interesse)||0; if(r<=0) return 0;
+  if(a.interessePeriodo==='giorno') return (Math.pow(1+r/100, 365)-1)*100;
+  const m = tassoMensile(a); return (Math.pow(1+m,12)-1)*100;
+}
+function fmtPct(n){ return Number(n).toLocaleString('it-IT',{maximumFractionDigits: Math.abs(n)<0.1 ? 4 : 2}) + '%'; }
+function etichettaTasso(a){
+  if(a.interessePeriodo==='giorno') return `${fmtPct(a.interesse)} al giorno (≈ ${fmtPct(tassoAnnuoEquivalente(a))} annuo)`;
+  if(a.interessePeriodo==='anno') return `${fmtPct(a.interesse)} annuo`;
+  return `${fmtPct(a.interesse)} al mese (≈ ${fmtPct(tassoAnnuoEquivalente(a))} annuo)`;
+}
+function giornoSuccessivo(d){ const dt = new Date(d+'T00:00:00'); dt.setDate(dt.getDate()+1); return dateKeyFromDate(dt); }
+// interesse giornaliero: matura ogni giorno (composto) e confluisce in UN movimento per mese,
+// che si aggiorna giorno dopo giorno. I centesimi non ancora accreditati restano in a.interesseResto.
+function maturaInteresseGiornaliero(a){
+  const rd = tassoGiornaliero(a); if(!rd) return false;
+  const oggi = oggiStr();
+  if(!a.ultimoInteresseGiorno) a.ultimoInteresseGiorno = oggi;
+  if(a.ultimoInteresseGiorno >= oggi) return false;
+  // al massimo ~3 anni di recupero
+  let da = giornoSuccessivo(a.ultimoInteresseGiorno);
+  const limiteIndietro = (()=>{ const d=new Date(); d.setDate(d.getDate()-1100); return dateKeyFromDate(d); })();
+  if(da < limiteIndietro) da = limiteIndietro;
+  let changed = false;
+  while(da <= oggi){
+    const mese = da.slice(0,7);
+    const fineMese = ultimoGiornoMese(mese);
+    const a_ = fineMese < oggi ? fineMese : oggi;               // ultimo giorno del blocco (stesso mese)
+    const nGiorni = Math.round((new Date(a_+'T00:00:00') - new Date(da+'T00:00:00'))/86400000) + 1;
+    const base = Math.max(0, Number(a.balance)||0);
+    const esatto = base*(Math.pow(1+rd, nGiorni)-1) + (Number(a.interesseResto)||0);
+    const imp = Math.floor(esatto*100)/100;
+    a.interesseResto = Math.max(0, esatto - imp);
+    if(imp>0){
+      a.balance = Math.round((Number(a.balance) + imp)*100)/100;
+      const mov = db.movimenti.find(m=>m.fromInteressi===a.id && m.interesseMese===mese && m.type==='entrata');
+      if(mov){ mov.amount = Math.round((Number(mov.amount)+imp)*100)/100; mov.date = a_; }
+      else db.movimenti.push({ id:uid(), type:'entrata', name:`Interessi ${fmtMese(mese).toLowerCase()} · ${a.name}`, amount:imp, date:a_, accountId:a.id, category:'risparmio', fromInteressi:a.id, interesseMese:mese });
+    }
+    a.ultimoInteresseGiorno = a_;
+    changed = true;
+    da = giornoSuccessivo(a_);
+  }
+  return changed;
+}
 // mese (YYYY-MM) dell'ultima scadenza già "passata": se il giorno di quest'anno non è ancora arrivato, è il mese scorso
 function ultimaScadenzaPassata(giorno){
   const oggi = new Date();
@@ -1100,6 +1148,7 @@ function checkContiAutomatici(){
       }
     }
     // interessi (buono fruttifero, conto deposito…)
+    if(a.interessePeriodo==='giorno'){ if(maturaInteresseGiornaliero(a)) changed = true; return; }
     const tm = tassoMensile(a);
     if(tm>0){
       const g = a.interesseGiorno || 1;
@@ -1128,9 +1177,17 @@ function contoExtraHtml(a){
   if(tm>0){
     const prossimo = Math.max(0, Number(a.balance))*tm;
     const tra12 = Math.max(0, Number(a.balance))*Math.pow(1+tm,12);
-    const tassoTxt = a.interessePeriodo==='anno' ? `${fmtPct(a.interesse)} annuo` : `${fmtPct(a.interesse)} al mese (≈ ${fmtPct(tassoAnnuoEquivalente(a))} annuo)`;
-    righe.push(`<div class="acc-extra-row"><span>Interessi</span><b style="color:var(--mint)">+ ${euro(prossimo)}</b><small>${tassoTxt} · prossimo accredito ${fmtDate(prossimaScadenza(a.ultimoInteresse, a.interesseGiorno||1))}</small></div>`);
-    righe.push(`<div class="acc-extra-row"><span>Fra 1 anno</span><b>≈ ${euro(tra12)}</b><small>se il saldo resta invariato</small></div>`);
+    if(a.interessePeriodo==='giorno'){
+      const alGiorno = Math.max(0, Number(a.balance))*tassoGiornaliero(a);
+      const meseOra = meseChiave(0);
+      const maturati = db.movimenti.filter(m=>m.fromInteressi===a.id && m.interesseMese===meseOra).reduce((s,m)=>s+Number(m.amount),0);
+      const fraAnno = Math.max(0, Number(a.balance))*(1+tassoAnnuoEquivalente(a)/100);
+      righe.push(`<div class="acc-extra-row"><span>Interessi</span><b style="color:var(--mint)">+ ${euro(alGiorno)}/giorno</b><small>${etichettaTasso(a)} · maturati questo mese ${euro(maturati)}</small></div>`);
+      righe.push(`<div class="acc-extra-row"><span>Fra 1 anno</span><b>≈ ${euro(fraAnno)}</b><small>se il saldo resta invariato</small></div>`);
+    } else {
+      righe.push(`<div class="acc-extra-row"><span>Interessi</span><b style="color:var(--mint)">+ ${euro(prossimo)}</b><small>${etichettaTasso(a)} · prossimo accredito ${fmtDate(prossimaScadenza(a.ultimoInteresse, a.interesseGiorno||1))}</small></div>`);
+      righe.push(`<div class="acc-extra-row"><span>Fra 1 anno</span><b>≈ ${euro(tra12)}</b><small>se il saldo resta invariato</small></div>`);
+    }
   }
   return righe.length ? `<div class="acc-extra">${righe.join('')}</div>` : '';
 }
@@ -1195,11 +1252,12 @@ function modalAccount(id){
       <div class="field-row">
         <div class="field"><label>Tasso (%)</label><input id="f-interesse" type="text" inputmode="decimal" autocomplete="off" value="${a&&Number(a.interesse)>0?a.interesse:''}" placeholder="Es. 2" oninput="anteprimaInteressi()"></div>
         <div class="field"><label>Calcolato</label><select id="f-interesse-periodo" onchange="anteprimaInteressi()">
-          <option value="mese" ${!a||a.interessePeriodo!=='anno'?'selected':''}>al mese</option>
+          <option value="giorno" ${a&&a.interessePeriodo==='giorno'?'selected':''}>al giorno</option>
+          <option value="mese" ${!a||!['anno','giorno'].includes(a.interessePeriodo)?'selected':''}>al mese</option>
           <option value="anno" ${a&&a.interessePeriodo==='anno'?'selected':''}>all'anno</option>
         </select></div>
       </div>
-      <div class="field"><label>Giorno di accredito</label><select id="f-interesse-giorno">${giornoOptions(a?a.interesseGiorno:oggiG)}</select></div>
+      <div class="field" id="f-interesse-giorno-wrap" style="display:${a&&a.interessePeriodo==='giorno'?'none':'block'};"><label>Giorno di accredito</label><select id="f-interesse-giorno">${giornoOptions(a?a.interesseGiorno:oggiG)}</select></div>
       <div class="acc-form-hint" id="anteprima-interessi"></div>
     </div>
     <p style="color:var(--text-faint); font-size:11.5px; margin:4px 0 12px;">Canone e interessi vengono registrati da soli in "Movimenti" ogni mese, a partire dalla prossima scadenza (non subito). Gli interessi si calcolano sul saldo del momento, quindi crescono insieme al conto.</p>
@@ -1217,14 +1275,21 @@ function modalAccount(id){
 }
 function anteprimaInteressi(){
   const box = document.getElementById('anteprima-interessi'); if(!box) return;
-  const r = parseNum(document.getElementById('f-interesse').value)||0;
+  const r = parsePct(document.getElementById('f-interesse').value);
   const periodo = document.getElementById('f-interesse-periodo').value;
   const saldo = parseNum(document.getElementById('f-balance').value)||0;
+  const wrap = document.getElementById('f-interesse-giorno-wrap');
+  if(wrap) wrap.style.display = periodo==='giorno' ? 'none' : 'block';
   if(r<=0){ box.textContent = ''; return; }
   const finto = { interesse:r, interessePeriodo:periodo };
   const tm = tassoMensile(finto);
   const annuo = tassoAnnuoEquivalente(finto);
-  box.innerHTML = `${periodo==='mese'?`≈ ${fmtPct(annuo)} all'anno con l'interesse composto. `:''}${saldo>0?`Con ${euro(saldo)}: circa <b>+${euro(saldo*tm)}</b> il prossimo mese, <b>${euro(saldo*Math.pow(1+tm,12))}</b> tra 12 mesi.`:''}`;
+  const fraAnno = saldo*(1+annuo/100);
+  if(periodo==='giorno'){
+    box.innerHTML = `≈ ${fmtPct(annuo)} all'anno con l'interesse composto. Matura ogni giorno: in "Movimenti" trovi una sola voce "Interessi" per mese che cresce da sola.${saldo>0?` Con ${euro(saldo)}: circa <b>+${euro(saldo*r/100)}</b> al giorno, <b>+${euro(saldo*tm)}</b> al mese, <b>${euro(fraAnno)}</b> fra un anno.`:''}`;
+  } else {
+    box.innerHTML = `${periodo==='mese'?`≈ ${fmtPct(annuo)} all'anno con l'interesse composto. `:''}${saldo>0?`Con ${euro(saldo)}: circa <b>+${euro(saldo*tm)}</b> il prossimo mese, <b>${euro(fraAnno)}</b> fra un anno.`:''}`;
+  }
 }
 function selectColor(el){ el.parentElement.querySelectorAll('.color-swatch').forEach(s=>s.classList.remove('selected')); el.classList.add('selected'); }
 function saveAccount(id){
@@ -1234,11 +1299,13 @@ function saveAccount(id){
   const color = colorEl ? colorEl.dataset.color : ICON_COLORS[0];
   const canone = Math.max(0, parseNum(document.getElementById('f-canone').value)||0);
   const canoneGiorno = parseInt(document.getElementById('f-canone-giorno').value)||1;
-  const interesse = Math.max(0, parseNum(document.getElementById('f-interesse').value)||0);
-  const interessePeriodo = document.getElementById('f-interesse-periodo').value==='anno' ? 'anno' : 'mese';
+  const interesse = parsePct(document.getElementById('f-interesse').value);
+  const periodoSel = document.getElementById('f-interesse-periodo').value;
+  const interessePeriodo = ['anno','giorno'].includes(periodoSel) ? periodoSel : 'mese';
   const interesseGiorno = parseInt(document.getElementById('f-interesse-giorno').value)||1;
   if(!name) return toast('Inserisci un nome.');
   if(interessePeriodo==='mese' && interesse>20) return toast('Un tasso mensile così alto sembra un errore: controlla (forse è annuo?).');
+  if(interessePeriodo==='giorno' && interesse>1) return toast("Un tasso giornaliero sopra l'1% sembra un errore: controlla (forse è mensile o annuo?).");
   let a;
   if(id){
     a = db.accounts.find(x=>x.id===id); if(!a) return;
@@ -1263,9 +1330,19 @@ function saveAccount(id){
   } else { delete a.canone; delete a.canoneGiorno; delete a.ultimoCanone; }
   // interessi: stessa logica
   if(interesse>0){
-    if(!(Number(a.interesse)>0) || a.interesseGiorno!==interesseGiorno) a.ultimoInteresse = ultimaScadenzaPassata(interesseGiorno);
-    a.interesse = interesse; a.interessePeriodo = interessePeriodo; a.interesseGiorno = interesseGiorno;
-  } else { delete a.interesse; delete a.interessePeriodo; delete a.interesseGiorno; delete a.ultimoInteresse; }
+    const eraAttivo = Number(a.interesse)>0;
+    const cambioPeriodo = (a.interessePeriodo||'mese')!==interessePeriodo;
+    if(interessePeriodo==='giorno'){
+      // matura da domani; il resto dei centesimi riparte da zero
+      if(!eraAttivo || cambioPeriodo){ a.ultimoInteresseGiorno = oggiStr(); a.interesseResto = 0; }
+      delete a.interesseGiorno; delete a.ultimoInteresse;
+    } else {
+      if(!eraAttivo || cambioPeriodo || a.interesseGiorno!==interesseGiorno) a.ultimoInteresse = ultimaScadenzaPassata(interesseGiorno);
+      a.interesseGiorno = interesseGiorno;
+      delete a.ultimoInteresseGiorno; delete a.interesseResto;
+    }
+    a.interesse = interesse; a.interessePeriodo = interessePeriodo;
+  } else { delete a.interesse; delete a.interessePeriodo; delete a.interesseGiorno; delete a.ultimoInteresse; delete a.ultimoInteresseGiorno; delete a.interesseResto; }
   saveDB(); closeModal(); renderAll(); toast('Conto salvato.');
 }
 /* ==================== SPESE (movimenti che aggiornano il saldo in automatico) ==================== */
