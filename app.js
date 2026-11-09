@@ -187,9 +187,10 @@ function setSyncStatus(txt, warn){
 function saveDB(){
   if(!session || !db) return;
   const today = oggiStr();
-  const total = Math.round(db.accounts.reduce((s,a)=>s+Number(a.balance||0),0)*100)/100;
+  const total = sommaSaldi(()=>true);
+  const liquido = sommaSaldi(a=>!isVincolato(a));
   const idx = snapshots.findIndex(s=>s.date===today);
-  if(idx>=0) snapshots[idx].total = total; else snapshots.push({date:today, total});
+  if(idx>=0){ snapshots[idx].total = total; snapshots[idx].liquido = liquido; } else snapshots.push({date:today, total, liquido});
   snapshots.sort((a,b)=>a.date.localeCompare(b.date));
   snapshots = snapshots.slice(-370);
   db._rev = Date.now();
@@ -446,15 +447,21 @@ document.getElementById('sidebar-close-btn').addEventListener('click', closeSide
 document.getElementById('sidebar-overlay').addEventListener('click', closeSidebar);
 
 /* ==================== KPI ==================== */
+// conto vincolato (buono, deposito vincolato…): conta nel patrimonio ma NON nei soldi disponibili.
+// Se ha una data di sblocco, da quel giorno torna disponibile da solo.
+function isVincolato(a){ return !!(a && a.vincolato && (!a.vincoloFino || a.vincoloFino > oggiStr())); }
+function sommaSaldi(filtro){ return Math.round(db.accounts.filter(filtro).reduce((s,a)=>s+Number(a.balance||0),0)*100)/100; }
 function computeTotals(){
   const r2 = n=>Math.round(n*100)/100;
-  const totalConti = r2(db.accounts.reduce((s,a)=>s+Number(a.balance||0),0));
+  const totalConti = sommaSaldi(a=>!isVincolato(a));            // disponibili
+  const totalVincolati = sommaSaldi(isVincolato);
+  const patrimonio = r2(totalConti + totalVincolati);
   const prevOk = db.preventivati.filter(p=>p.stato==='accettato' && !prevInRitardo(p)).reduce((s,p)=>s+Number(p.amount||0),0);
   const stipendiPrevisti = db.previsioni.reduce((s,p)=>s+Number(p.amount||0),0);
   const totalPrev = r2(prevOk + stipendiPrevisti);
   const totalMancanti = r2(db.mancanti.reduce((s,a)=>s+Number(a.amount||0),0) + db.preventivati.filter(prevInRitardo).reduce((s,p)=>s+Number(p.amount||0),0));
   const totaleGenerale = r2(totalConti + totalPrev + totalMancanti);
-  return { totalConti, totalPrev, totalMancanti, totaleGenerale };
+  return { totalConti, totalVincolati, patrimonio, totalPrev, totalMancanti, totaleGenerale };
 }
 function computeTrendPct(currentTotal){
   const t = dashTrend();
@@ -480,6 +487,10 @@ function oreLavoroTesto(prezzo){
 function renderKpiBar(){
   const { totalConti, totalPrev, totalMancanti, totaleGenerale } = computeTotals();
   document.getElementById('kpi-attuale').textContent = euro(totalConti);
+  { const T = computeTotals(); const lbl = document.getElementById('kpi-attuale-label');
+    if(lbl) lbl.textContent = T.totalVincolati ? 'Disponibili' : 'Sui conti';
+    const cell = document.getElementById('kpi-attuale').closest('.kpi-cell');
+    if(cell) cell.title = T.totalVincolati ? `Patrimonio ${euro(T.patrimonio)} (di cui vincolati ${euro(T.totalVincolati)})` : ''; }
   document.getElementById('kpi-preventivato').textContent = euro(totalPrev);
   document.getElementById('kpi-mancante').textContent = euro(totalMancanti);
   document.getElementById('kpi-totale').textContent = euro(totaleGenerale);
@@ -743,6 +754,10 @@ document.addEventListener('click', ()=> document.getElementById('add-menu')?.cla
 function plur(n, sing, plu){ return `${n} ${n===1?sing:plu}`; }
 function dashLink(label, page){ return `<button class="dash-link" onclick="goToPage('${page}')">${label} →</button>`; }
 const ICO_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg>';
+function liquidoSnapshot(s){
+  if(typeof s.liquido==='number') return s.liquido;
+  return Math.round((Number(s.total||0) - computeTotals().totalVincolati)*100)/100;
+}
 function dashTrend(){
   const snaps = getSnapshots();
   if(snaps.length < 2) return null;
@@ -752,8 +767,9 @@ function dashTrend(){
   const past = snaps.filter(s=> s.date <= cutoff);
   const ref = past.length ? past[past.length-1] : snaps[0];
   if(!ref || ref.date===oggiStr()) return null;
-  const abs = Math.round((totalConti - Number(ref.total||0))*100)/100;
-  return { abs, pct: ref.total ? abs/Math.abs(ref.total)*100 : null };
+  const refVal = liquidoSnapshot(ref);
+  const abs = Math.round((totalConti - refVal)*100)/100;
+  return { abs, pct: refVal ? abs/Math.abs(refVal)*100 : null };
 }
 
 function dashData(){
@@ -782,7 +798,7 @@ function dashBlocks(D){
   const hero = `
     <div class="card dash-card dash-hero">
       <div class="dash-hero-top">
-        <div><div class="dash-hero-label">Saldo sui conti</div><div class="dash-hero-amount">${euro(D.totalConti)}</div></div>
+        <div><div class="dash-hero-label">${D.totalVincolati ? 'Disponibili' : 'Saldo sui conti'}</div><div class="dash-hero-amount">${euro(D.totalConti)}</div>${D.totalVincolati ? `<div class="dash-hero-patrimonio">Patrimonio ${euro(D.patrimonio)} · vincolati ${euro(D.totalVincolati)}</div>` : ''}</div>
         ${trendHtml}
       </div>
       <div class="dash-hero-chart"><canvas id="chart-trend"></canvas></div>
@@ -800,7 +816,7 @@ function dashBlocks(D){
         <div class="dash-hero-stat">
           <div class="dash-hero-stat-label"><i style="background:var(--text)"></i>Totale previsto</div>
           <div class="dash-hero-stat-value">${euro(D.totaleGenerale)}</div>
-          <div class="dash-hero-stat-hint">conti + in arrivo</div>
+          <div class="dash-hero-stat-hint">${D.totalVincolati ? 'disponibili + in arrivo' : 'conti + in arrivo'}</div>
         </div>
       </div>
     </div>`;
@@ -867,11 +883,11 @@ function dashBlocks(D){
     <div class="card dash-card">
       <div class="dash-card-head"><div class="dash-card-title">Conti <span class="count">${db.accounts.length}</span></div>${dashLink('Gestisci','conti')}</div>
       ${db.accounts.length ? `<div class="mini-list">${db.accounts.map(a=>{
-        const pct = D.totalConti>0 ? Math.max(0, Number(a.balance)/D.totalConti*100) : 0;
+        const pct = D.patrimonio>0 ? Math.max(0, Number(a.balance)/D.patrimonio*100) : 0;
         return `<div class="mini-row block">
           <div style="display:flex; align-items:center; gap:10px;">
             <div class="mini-dot" style="width:30px; height:30px; background:${a.color}22; color:${a.color}; font-size:11px;">${esc(a.icon||a.name.slice(0,2))}</div>
-            <div class="mini-main"><div class="mini-title">${esc(a.name)}</div></div>
+            <div class="mini-main"><div class="mini-title">${esc(a.name)}</div>${isVincolato(a)?`<div class="mini-sub">${ICO_LOCK}Vincolato${a.vincoloFino?' fino al '+fmtDate(a.vincoloFino):''}</div>`:''}</div>
             <div class="mini-amount">${euro(a.balance)}</div>
           </div>
           <div class="mini-bar"><div style="width:${pct}%; background:${a.color};"></div></div>
@@ -978,8 +994,9 @@ function mobileDashHtml(D, B, nome, oggiLungo){
         <div class="m-hello"><div>Ciao ${esc(nome)}</div><span>${oggiLungo}</span></div>
         <button class="m-icon-btn" onclick="openSidebar()" aria-label="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
       </div>
-      <div class="m-balance-label">Saldo sui conti</div>
+      <div class="m-balance-label">${D.totalVincolati ? 'Disponibili' : 'Saldo sui conti'}</div>
       <div class="m-balance">${euro(D.totalConti)}</div>
+      ${D.totalVincolati ? `<div class="m-patrimonio">Patrimonio ${euro(D.patrimonio)} · vincolati ${euro(D.totalVincolati)}</div>` : ''}
       ${tr ? `<div class="hero-balance-trend ${tr.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${tr.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${tr.abs>=0?'+':'−'}${euro(Math.abs(tr.abs))} in 30 giorni</div>` : ''}
       <div class="m-actions">
         <button class="m-action primary" onclick="modalMovimento(null,'uscita')"><span>${svgI('down',18)}</span>Spesa</button>
@@ -997,7 +1014,7 @@ function mobileDashHtml(D, B, nome, oggiLungo){
           <button class="m-acc-card" style="--acc:${a.color}" onclick="modalAccount('${a.id}')">
             <div class="m-acc-top"><span class="m-acc-chip">${esc(a.icon||a.name.slice(0,2))}</span><span class="m-acc-name">${esc(a.name)}</span></div>
             <div class="m-acc-bal">${euro(a.balance)}</div>
-            <div class="m-acc-share">${D.totalConti>0?Math.round(Math.max(0,a.balance)/D.totalConti*100):0}% del totale</div>
+            <div class="m-acc-share">${isVincolato(a) ? `${ICO_LOCK}Vincolato${a.vincoloFino?' fino al '+fmtDate(a.vincoloFino):''}` : `${D.patrimonio>0?Math.round(Math.max(0,a.balance)/D.patrimonio*100):0}% del totale`}</div>
           </button>`).join('')}
         <button class="m-acc-card add" onclick="modalAccount()"><span>+</span>Nuovo conto</button>
       </div>` : `<button class="m-empty-cta" onclick="modalAccount()">+ Aggiungi il tuo primo conto</button>`}
@@ -1034,7 +1051,7 @@ function drawTrendChart(snaps){
   const ctx = document.getElementById('chart-trend');
   if(!ctx || typeof Chart === 'undefined') return;
   if(chartTrend) chartTrend.destroy();
-  const data = snaps.length ? snaps : [{date:oggiStr(), total: db.accounts.reduce((s,a)=>s+Number(a.balance),0)}];
+  const data = snaps.length ? snaps.map(s=>({ date:s.date, total: liquidoSnapshot(s) })) : [{date:oggiStr(), total: computeTotals().totalConti}];
   chartTrend = new Chart(ctx, {
     type:'line',
     data:{
@@ -1081,7 +1098,7 @@ function tassoAnnuoEquivalente(a){
   if(a.interessePeriodo==='giorno') return (Math.pow(1+r/100, 365)-1)*100;
   const m = tassoMensile(a); return (Math.pow(1+m,12)-1)*100;
 }
-function fmtPct(n){ return Number(n).toLocaleString('it-IT',{maximumFractionDigits: Math.abs(n)<0.1 ? 4 : 2}) + '%'; }
+function fmtPct(n){ return Number(n).toLocaleString('it-IT',{maximumFractionDigits: Math.abs(n)<0.1 ? 5 : 2}) + '%'; }
 function etichettaTasso(a){
   if(a.interessePeriodo==='giorno') return `${fmtPct(a.interesse)} al giorno (≈ ${fmtPct(tassoAnnuoEquivalente(a))} annuo)`;
   if(a.interessePeriodo==='anno') return `${fmtPct(a.interesse)} annuo`;
@@ -1191,9 +1208,10 @@ function contoExtraHtml(a){
   }
   return righe.length ? `<div class="acc-extra">${righe.join('')}</div>` : '';
 }
+const ICO_LOCK = '<svg class="ico-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>';
 function renderConti(){
   const f = filters.conti;
-  const total = db.accounts.reduce((s,a)=>s+Number(a.balance||0),0);
+  const T = computeTotals();
   const canoni = db.accounts.reduce((s,a)=>s+(Number(a.canone)||0),0);
   const interessi = db.accounts.reduce((s,a)=>s+Math.max(0,Number(a.balance)||0)*tassoMensile(a),0);
   let list = [...db.accounts];
@@ -1202,13 +1220,13 @@ function renderConti(){
   const ICO_DEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg>';
   document.getElementById('page-conti').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Conti</div><div class="page-sub">${plur(db.accounts.length,'sorgente','sorgenti')} · totale ${euro(total)}${canoni?` · canoni −${euro(canoni)}/mese`:''}${interessi?` · interessi ≈ +${euro(interessi)}/mese`:''}</div></div>
+      <div><div class="page-title">Conti</div><div class="page-sub">${plur(db.accounts.length,'sorgente','sorgenti')} · ${T.totalVincolati ? `disponibili ${euro(T.totalConti)} · vincolati ${euro(T.totalVincolati)} · patrimonio ${euro(T.patrimonio)}` : `totale ${euro(T.totalConti)}`}${canoni?` · canoni −${euro(canoni)}/mese`:''}${interessi?` · interessi ≈ +${euro(interessi)}/mese`:''}</div></div>
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalAccount()">+ Nuovo conto</button></div>
     </div>
     ${db.accounts.length>3 ? searchBar('conti','Cerca conto...') : ''}
-    <div class="grid grid-3">
-      ${list.map(a=>`
-        <div class="card">
+    ${(()=>{
+      const card = a=>`
+        <div class="card ${isVincolato(a)?'acc-vincolato':''}">
           <div style="display:flex; justify-content:space-between; align-items:flex-start;">
             <div class="row-icon" style="background:${a.color}22; color:${a.color};">${esc(a.icon||a.name.charAt(0))}</div>
             <div class="row-actions">
@@ -1218,13 +1236,18 @@ function renderConti(){
           </div>
           <div class="card-title" style="margin-top:14px;">${esc(a.name)}</div>
           <div class="stat-value">${euro(Number(a.balance)||0)}</div>
+          ${isVincolato(a) ? `<div class="acc-lock-pill">${ICO_LOCK}Vincolato${a.vincoloFino?` · disponibile dal ${fmtDate(a.vincoloFino)}`:''}</div>` : ''}
           ${contoExtraHtml(a)}
-        </div>
-      `).join('')}
-      ${list.length || !f.q ? `<div class="card" style="display:flex; align-items:center; justify-content:center; border-style:dashed; cursor:pointer; color:var(--text-faint); min-height:120px;" onclick="modalAccount()">
-        + Aggiungi sorgente
-      </div>` : ''}
-    </div>
+        </div>`;
+      const addCard = list.length || !f.q ? `<div class="card" style="display:flex; align-items:center; justify-content:center; border-style:dashed; cursor:pointer; color:var(--text-faint); min-height:120px;" onclick="modalAccount()">+ Aggiungi sorgente</div>` : '';
+      const liquidi = list.filter(a=>!isVincolato(a)), vincolati = list.filter(isVincolato);
+      if(!vincolati.length) return `<div class="grid grid-3">${liquidi.map(card).join('')}${addCard}</div>`;
+      return `
+        <div class="section-title">Disponibili <span class="count">${euro(T.totalConti)}</span></div>
+        <div class="grid grid-3">${liquidi.map(card).join('')}${addCard}</div>
+        <div class="section-title">Vincolati <span class="count">${euro(T.totalVincolati)} · contano nel patrimonio, non nei disponibili</span></div>
+        <div class="grid grid-3">${vincolati.map(card).join('')}</div>`;
+    })()}
   `;
 }
 function giornoOptions(sel){ return Array.from({length:28},(_,i)=>i+1).map(g=>`<option value="${g}" ${g===(sel||1)?'selected':''}>${g}</option>`).join(''); }
@@ -1262,6 +1285,13 @@ function modalAccount(id){
     </div>
     <p style="color:var(--text-faint); font-size:11.5px; margin:4px 0 12px;">Canone e interessi vengono registrati da soli in "Movimenti" ogni mese, a partire dalla prossima scadenza (non subito). Gli interessi si calcolano sul saldo del momento, quindi crescono insieme al conto.</p>
 
+    <div class="acc-form-section">
+      <label class="chip-check" style="margin-bottom:10px;"><input type="checkbox" id="f-vincolato" ${a&&a.vincolato?'checked':''} onchange="document.getElementById('f-vincolo-wrap').style.display=this.checked?'block':'none'"> <span><b>Vincolato</b> — non posso ritirarli subito (buono, deposito vincolato…)</span></label>
+      <div id="f-vincolo-wrap" style="display:${a&&a.vincolato?'block':'none'};">
+        <div class="field"><label>Disponibile dal (facoltativo)</label><input id="f-vincolo-fino" type="date" value="${a&&a.vincoloFino?a.vincoloFino:''}"></div>
+        <div class="acc-form-hint" style="margin-top:-8px;">Conta nel patrimonio ma non nei soldi disponibili. Dalla data indicata torna disponibile da solo.</div>
+      </div>
+    </div>
     <div class="field"><label>Colore</label>
       <div class="color-picker">${ICON_COLORS.map(c=>`<div class="color-swatch ${a&&a.color===c?'selected':''}" style="background:${c}" data-color="${c}" onclick="selectColor(this)"></div>`).join('')}</div>
     </div>
@@ -1303,6 +1333,8 @@ function saveAccount(id){
   const periodoSel = document.getElementById('f-interesse-periodo').value;
   const interessePeriodo = ['anno','giorno'].includes(periodoSel) ? periodoSel : 'mese';
   const interesseGiorno = parseInt(document.getElementById('f-interesse-giorno').value)||1;
+  const vincolato = !!document.getElementById('f-vincolato')?.checked;
+  const vincoloFino = vincolato ? (document.getElementById('f-vincolo-fino')?.value || '') : '';
   if(!name) return toast('Inserisci un nome.');
   if(interessePeriodo==='mese' && interesse>20) return toast('Un tasso mensile così alto sembra un errore: controlla (forse è annuo?).');
   if(interessePeriodo==='giorno' && interesse>1) return toast("Un tasso giornaliero sopra l'1% sembra un errore: controlla (forse è mensile o annuo?).");
@@ -1323,6 +1355,8 @@ function saveAccount(id){
     a = { id:uid(), name, balance, color, icon:name.slice(0,2).toUpperCase() };
     db.accounts.push(a);
   }
+  if(vincolato){ a.vincolato = true; if(vincoloFino) a.vincoloFino = vincoloFino; else delete a.vincoloFino; }
+  else { delete a.vincolato; delete a.vincoloFino; }
   // canone: se viene attivato ora o cambia giorno, parte dalla prossima scadenza
   if(canone>0){
     if(!(Number(a.canone)>0) || a.canoneGiorno!==canoneGiorno) a.ultimoCanone = ultimaScadenzaPassata(canoneGiorno);
