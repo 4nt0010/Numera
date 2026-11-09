@@ -84,6 +84,7 @@ function seedDB(){
     tasks: [],
     stipendi: [],
     movimenti: [],
+    finanziamenti: [],
     budget: {},
     oreSettimanali: 40,
     risparmiatoRinunce: 0,
@@ -333,7 +334,7 @@ document.getElementById('user-chip').addEventListener('click', ()=> goToPage('ac
 function normalizzaDB(){
   const def = seedDB();
   Object.keys(def).forEach(k=>{ if(db[k]===undefined || db[k]===null) db[k] = def[k]; });
-  ['accounts','preventivati','previsioni','mancanti','fisse','acquisti','tasks','stipendi','movimenti'].forEach(k=>{ if(!Array.isArray(db[k])) db[k] = []; });
+  ['accounts','preventivati','previsioni','mancanti','fisse','acquisti','tasks','stipendi','movimenti','finanziamenti'].forEach(k=>{ if(!Array.isArray(db[k])) db[k] = []; });
   if(db.stipendio){
     // vecchio modello a singolo stipendio
     if(!db.stipendi.length) db.stipendi = [{ id:uid(), nome:'Stipendio', base:db.stipendio.base||0, eccezioni:db.stipendio.eccezioni||[], ricevuti:db.stipendio.ricevuti||[] }];
@@ -461,7 +462,9 @@ function computeTotals(){
   const totalPrev = r2(prevOk + stipendiPrevisti);
   const totalMancanti = r2(db.mancanti.reduce((s,a)=>s+Number(a.amount||0),0) + db.preventivati.filter(prevInRitardo).reduce((s,p)=>s+Number(p.amount||0),0));
   const totaleGenerale = r2(totalConti + totalPrev + totalMancanti);
-  return { totalConti, totalVincolati, patrimonio, totalPrev, totalMancanti, totaleGenerale };
+  const debiti = (db.finanziamenti||[]).length ? debitoResiduo() : 0;
+  const patrimonioNetto = r2(patrimonio - debiti);
+  return { totalConti, totalVincolati, patrimonio, debiti, patrimonioNetto, totalPrev, totalMancanti, totaleGenerale };
 }
 function computeTrendPct(currentTotal){
   const t = dashTrend();
@@ -490,13 +493,19 @@ function renderKpiBar(){
   { const T = computeTotals(); const lbl = document.getElementById('kpi-attuale-label');
     if(lbl) lbl.textContent = T.totalVincolati ? 'Disponibili' : 'Sui conti';
     const cell = document.getElementById('kpi-attuale').closest('.kpi-cell');
-    if(cell) cell.title = T.totalVincolati ? `Patrimonio ${euro(T.patrimonio)} (di cui vincolati ${euro(T.totalVincolati)})` : ''; }
+    if(cell) cell.title = [T.totalVincolati ? `Patrimonio ${euro(T.patrimonio)} (di cui vincolati ${euro(T.totalVincolati)})` : '', T.debiti ? `Debiti residui ${euro(T.debiti)} · patrimonio netto ${euro(T.patrimonioNetto)}` : ''].filter(Boolean).join('\n');
+    // numero piccolo sotto: il totale "vero" compresi i conti vincolati
+    const sub = document.getElementById('kpi-attuale-sub'), subTot = document.getElementById('kpi-totale-sub');
+    if(sub){ sub.style.display = T.totalVincolati ? '' : 'none'; sub.innerHTML = T.totalVincolati ? `Patrimonio <b>${euro(T.patrimonio)}</b>` : ''; }
+    if(subTot){ subTot.style.display = T.totalVincolati ? '' : 'none'; subTot.innerHTML = T.totalVincolati ? `con vincolati <b>${euro(T.totaleGenerale + T.totalVincolati)}</b>` : ''; } }
   document.getElementById('kpi-preventivato').textContent = euro(totalPrev);
   document.getElementById('kpi-mancante').textContent = euro(totalMancanti);
   document.getElementById('kpi-totale').textContent = euro(totaleGenerale);
   const trendEl = document.getElementById('kpi-trend-attuale');
   const pct = computeTrendPct(totalConti);
   if(pct===null){ trendEl.style.display = 'none'; return; }
+  const tb = dashTrend();
+  trendEl.title = tb && tb.base==='patrimonio' ? 'Variazione del patrimonio negli ultimi 30 giorni (lo storico dei soli disponibili parte da oggi)' : 'Variazione negli ultimi 30 giorni';
   const up = pct>=0;
   trendEl.style.display = 'inline-flex';
   trendEl.style.background = up ? 'var(--mint-dim)' : 'var(--coral-dim)';
@@ -577,6 +586,7 @@ const RENDER_MAP = {
   acquisti: ()=>renderAcquisti(),
   conti: ()=>renderConti(),
   task: ()=>renderTask(),
+  finanziamenti: ()=>renderFinanziamenti(),
 };
 function setFilter(page, field, value){
   filters[page][field] = value;
@@ -687,10 +697,10 @@ function modalGiornoEventi(dataStr){
 
 function renderAll(){
   if(!db) return;
-  [ ()=>checkStipendioAutomatico(), ()=>checkPrevisioniScadute(), ()=>checkSpeseFisseAutomatiche(), ()=>checkContiAutomatici(), ()=>checkAcquistiDaRimuovere() ]
+  [ ()=>checkStipendioAutomatico(), ()=>checkPrevisioniScadute(), ()=>checkSpeseFisseAutomatiche(), ()=>checkContiAutomatici(), ()=>checkFinanziamentiAutomatici(), ()=>checkAcquistiDaRimuovere() ]
     .forEach(fn=>{ try{ fn(); }catch(err){ console.error('Controllo automatico non riuscito:', err); } });
   db.preventivati.forEach(p=>{ try{ migratePrev(p); }catch(err){ console.error('Preventivo non valido:', p, err); } });
-  const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderClienti, renderAcquisti, renderTask, renderAccount, renderPrevDrawer];
+  const renderers = [renderKpiBar, renderDashboard, renderConti, renderSpese, renderStipendio, renderPreventivati, renderMancanti, renderFisse, renderFinanziamenti, renderClienti, renderAcquisti, renderTask, renderAccount, renderPrevDrawer];
   if(currentPage==='simulatore') renderers.push(renderSimulatore);
   renderers.forEach(fn=>{
     try{ fn(); }
@@ -713,6 +723,7 @@ function updateBadge(){
   setBadge('badge-preventivati', imminenti);
   document.getElementById('badge-preventivati').classList.add('amber');
   setBadge('badge-task', db.tasks.filter(t=>!t.done).length);
+  if(document.getElementById('badge-finanziamenti')) setBadge('badge-finanziamenti', finArretrate());
 }
 
 /* ==================== DASHBOARD ==================== */
@@ -734,6 +745,7 @@ const ICO = {
   cart:'<path d="M6 2l1.5 4M18 2l-1.5 4M3.5 8h17l-1.6 9.6a2 2 0 01-2 1.7H7.1a2 2 0 01-2-1.7L3.5 8z"/>',
   cash:'<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="12" cy="12" r="3"/>',
   flask:'<path d="M9 2v6L4 18a2 2 0 002 3h12a2 2 0 002-3l-5-10V2M9 2h6M8 15h8"/>',
+  loan:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 14h3M8 17h6"/>',
   users:'<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/>',
 };
 function svgI(name, size){ return `<svg viewBox="0 0 24 24" width="${size||18}" height="${size||18}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICO[name]}</svg>`; }
@@ -747,6 +759,7 @@ const ADD_ACTIONS = [
   { label:'Da ricevere', fn:'modalMancante()', bg:'var(--coral-dim)', color:'var(--coral)', ico:'alert' },
   { label:'Spesa fissa', fn:'modalFissa()', bg:'var(--amber-dim)', color:'var(--amber)', ico:'repeat' },
   { label:'Acquisto', fn:'modalAcquisto()', bg:'rgba(79,209,232,0.14)', color:'#4FD1E8', ico:'cart' },
+  { label:'Finanziamento', fn:'modalFinanziamento()', bg:'rgba(191,90,242,0.14)', color:'#BF5AF2', ico:'loan' },
 ];
 function toggleAddMenu(e){ e.stopPropagation(); document.getElementById('add-menu')?.classList.toggle('open'); }
 document.addEventListener('click', ()=> document.getElementById('add-menu')?.classList.remove('open'));
@@ -754,10 +767,8 @@ document.addEventListener('click', ()=> document.getElementById('add-menu')?.cla
 function plur(n, sing, plu){ return `${n} ${n===1?sing:plu}`; }
 function dashLink(label, page){ return `<button class="dash-link" onclick="goToPage('${page}')">${label} →</button>`; }
 const ICO_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg>';
-function liquidoSnapshot(s){
-  if(typeof s.liquido==='number') return s.liquido;
-  return Math.round((Number(s.total||0) - computeTotals().totalVincolati)*100)/100;
-}
+// i punti salvati prima dei conti vincolati hanno solo "total" (tutti i conti): per quelli
+// l'andamento si calcola sul patrimonio, che è confrontabile, invece di stimare i disponibili.
 function dashTrend(){
   const snaps = getSnapshots();
   if(snaps.length < 2) return null;
@@ -767,11 +778,20 @@ function dashTrend(){
   const past = snaps.filter(s=> s.date <= cutoff);
   const ref = past.length ? past[past.length-1] : snaps[0];
   if(!ref || ref.date===oggiStr()) return null;
-  const refVal = liquidoSnapshot(ref);
-  const abs = Math.round((totalConti - refVal)*100)/100;
-  return { abs, pct: refVal ? abs/Math.abs(refVal)*100 : null };
+  const T = computeTotals();
+  const suLiquido = typeof ref.liquido==='number' || !T.totalVincolati;
+  const refVal = suLiquido ? (typeof ref.liquido==='number' ? ref.liquido : Number(ref.total||0)) : Number(ref.total||0);
+  const ora = suLiquido ? totalConti : T.patrimonio;
+  const abs = Math.round((ora - refVal)*100)/100;
+  return { abs, pct: refVal ? abs/Math.abs(refVal)*100 : null, base: suLiquido ? 'disponibili' : 'patrimonio' };
 }
 
+function riepilogoPatrimonio(D, cls){
+  const parti = [];
+  if(D.totalVincolati) parti.push(`Patrimonio ${euro(D.patrimonio)}`, `vincolati ${euro(D.totalVincolati)}`);
+  if(D.debiti) parti.push(`debiti ${euro(D.debiti)}`, `netto ${euro(D.patrimonioNetto)}`);
+  return parti.length ? `<div class="${cls}">${parti.join(' · ')}</div>` : '';
+}
 function dashData(){
   const T = computeTotals();
   const meseCorrente = meseKeyFromDate(new Date());
@@ -791,14 +811,14 @@ function dashData(){
 function dashBlocks(D){
   const maxCat = D.topCat.length ? Math.max(...D.topCat.map(c=>Math.max(D.perCat[c.key], db.budget[c.key]||0))) : 1;
   const trendHtml = D.trend
-    ? `<span class="dash-trend ${D.trend.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${D.trend.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${D.trend.abs>=0?'+':'−'}${euro(Math.abs(D.trend.abs))}${D.trend.pct!==null?` · ${Math.abs(D.trend.pct).toFixed(1)}%`:''} in 30 giorni</span>`
+    ? `<span class="dash-trend ${D.trend.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${D.trend.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${D.trend.abs>=0?'+':'−'}${euro(Math.abs(D.trend.abs))}${D.trend.pct!==null?` · ${Math.abs(D.trend.pct).toFixed(1).replace('.',',')}%`:''}${D.trend.base==='patrimonio'?' patrimonio':''} in 30 giorni</span>`
     : `<span class="dash-trend flat">L'andamento compare dopo qualche giorno di utilizzo</span>`;
   const accettati = db.preventivati.filter(p=>p.stato==='accettato').length;
 
   const hero = `
     <div class="card dash-card dash-hero">
       <div class="dash-hero-top">
-        <div><div class="dash-hero-label">${D.totalVincolati ? 'Disponibili' : 'Saldo sui conti'}</div><div class="dash-hero-amount">${euro(D.totalConti)}</div>${D.totalVincolati ? `<div class="dash-hero-patrimonio">Patrimonio ${euro(D.patrimonio)} · vincolati ${euro(D.totalVincolati)}</div>` : ''}</div>
+        <div><div class="dash-hero-label">${D.totalVincolati ? 'Disponibili' : 'Saldo sui conti'}</div><div class="dash-hero-amount">${euro(D.totalConti)}</div>${riepilogoPatrimonio(D, 'dash-hero-patrimonio')}</div>
         ${trendHtml}
       </div>
       <div class="dash-hero-chart"><canvas id="chart-trend"></canvas></div>
@@ -996,8 +1016,8 @@ function mobileDashHtml(D, B, nome, oggiLungo){
       </div>
       <div class="m-balance-label">${D.totalVincolati ? 'Disponibili' : 'Saldo sui conti'}</div>
       <div class="m-balance">${euro(D.totalConti)}</div>
-      ${D.totalVincolati ? `<div class="m-patrimonio">Patrimonio ${euro(D.patrimonio)} · vincolati ${euro(D.totalVincolati)}</div>` : ''}
-      ${tr ? `<div class="hero-balance-trend ${tr.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${tr.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${tr.abs>=0?'+':'−'}${euro(Math.abs(tr.abs))} in 30 giorni</div>` : ''}
+      ${riepilogoPatrimonio(D, 'm-patrimonio')}
+      ${tr ? `<div class="hero-balance-trend ${tr.abs>=0?'up':'down'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="${tr.abs>=0?'M5 12l5-5 4 4 5-6':'M5 6l5 5 4-4 5 6'}"/></svg>${tr.abs>=0?'+':'−'}${euro(Math.abs(tr.abs))}${tr.base==='patrimonio'?' patrimonio':''} in 30 giorni</div>` : ''}
       <div class="m-actions">
         <button class="m-action primary" onclick="modalMovimento(null,'uscita')"><span>${svgI('down',18)}</span>Spesa</button>
         <button class="m-action" onclick="modalMovimento(null,'entrata')"><span>${svgI('up',18)}</span>Entrata</button>
@@ -1028,7 +1048,7 @@ function mobileDashHtml(D, B, nome, oggiLungo){
       <div class="card m-quick">
         <div class="m-section-head" style="margin:0 0 12px;"><span>Azioni rapide</span></div>
         <div class="m-quick-grid">
-          ${ADD_ACTIONS.slice(3).filter(a=>a.label!=='Trasferimento').concat([
+          ${ADD_ACTIONS.slice(3).filter(a=>a.label!=='Trasferimento' && a.label!=='Finanziamento').concat([
             {label:'Clienti', fn:"goToPage('clienti')", bg:'rgba(178,124,255,0.14)', color:'#B27CFF', ico:'users'},
             {label:'Stipendio', fn:"goToPage('stipendio')", bg:'var(--mint-dim)', color:'var(--mint)', ico:'cash'},
             {label:'Simulatore', fn:"goToPage('simulatore')", bg:'rgba(191,90,242,0.14)', color:'#BF5AF2', ico:'flask'}]).slice(0,8).map(a=>`
@@ -1051,20 +1071,26 @@ function drawTrendChart(snaps){
   const ctx = document.getElementById('chart-trend');
   if(!ctx || typeof Chart === 'undefined') return;
   if(chartTrend) chartTrend.destroy();
-  const data = snaps.length ? snaps.map(s=>({ date:s.date, total: liquidoSnapshot(s) })) : [{date:oggiStr(), total: computeTotals().totalConti}];
+  const T = computeTotals();
+  const data = snaps.length ? snaps : [{date:oggiStr(), total:T.patrimonio, liquido:T.totalConti}];
+  // linea verde: disponibili (solo dove il dato esiste); linea tratteggiata: patrimonio, se ci sono vincolati
+  const disp = data.map(s=> typeof s.liquido==='number' ? s.liquido : (T.totalVincolati ? null : Number(s.total||0)));
+  const datasets = [{
+    label:'Disponibili', data: disp,
+    borderColor:'#30D158', backgroundColor:'rgba(48,209,88,0.14)',
+    fill:true, tension:0.4, borderWidth:2.5,
+    pointRadius: disp.map((v,i)=> v!==null && (i===disp.length-1 || disp[i+1]===null) && (i===0 || disp[i-1]===null) ? 3 : 0),
+  }];
+  if(T.totalVincolati) datasets.push({
+    label:'Patrimonio', data: data.map(s=>Number(s.total||0)),
+    borderColor:'rgba(255,255,255,0.35)', borderDash:[5,4], fill:false, tension:0.4, pointRadius:0, borderWidth:1.6,
+  });
   chartTrend = new Chart(ctx, {
     type:'line',
-    data:{
-      labels: data.map(s=>fmtDate(s.date)),
-      datasets:[{
-        data: data.map(s=>s.total),
-        borderColor:'#30D158', backgroundColor:'rgba(48,209,88,0.14)',
-        fill:true, tension:0.4, pointRadius:0, borderWidth:2.5,
-      }]
-    },
+    data:{ labels: data.map(s=>fmtDate(s.date)), datasets },
     options:{
       responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c=> euro(c.raw) } } },
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c=> `${c.dataset.label}: ${euro(c.raw)}` } } },
       scales:{
         x:{ grid:{display:false}, ticks:{ color:'#66796F', font:{size:10}, maxTicksLimit:6, maxRotation:0 } },
         y:{ grid:{color:'rgba(255,255,255,0.05)'}, ticks:{ color:'#66796F', font:{size:10}, maxTicksLimit:5, callback:v=>'€ '+Number(v).toLocaleString('it-IT',{maximumFractionDigits:0}) } }
@@ -1220,7 +1246,7 @@ function renderConti(){
   const ICO_DEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg>';
   document.getElementById('page-conti').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Conti</div><div class="page-sub">${plur(db.accounts.length,'sorgente','sorgenti')} · ${T.totalVincolati ? `disponibili ${euro(T.totalConti)} · vincolati ${euro(T.totalVincolati)} · patrimonio ${euro(T.patrimonio)}` : `totale ${euro(T.totalConti)}`}${canoni?` · canoni −${euro(canoni)}/mese`:''}${interessi?` · interessi ≈ +${euro(interessi)}/mese`:''}</div></div>
+      <div><div class="page-title">Conti</div><div class="page-sub">${plur(db.accounts.length,'sorgente','sorgenti')} · ${T.totalVincolati ? `disponibili ${euro(T.totalConti)} · vincolati ${euro(T.totalVincolati)} · patrimonio ${euro(T.patrimonio)}` : `totale ${euro(T.totalConti)}`}${T.debiti ? ` · debiti ${euro(T.debiti)} · netto ${euro(T.patrimonioNetto)}` : ''}${canoni?` · canoni −${euro(canoni)}/mese`:''}${interessi?` · interessi ≈ +${euro(interessi)}/mese`:''}</div></div>
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalAccount()">+ Nuovo conto</button></div>
     </div>
     ${db.accounts.length>3 ? searchBar('conti','Cerca conto...') : ''}
@@ -3170,12 +3196,13 @@ function fmtMeseNome(n){
 function renderFisse(){
   const filt = filters.fisse;
   const conCanone = db.accounts.filter(a=>Number(a.canone)>0);
-  const mensile = db.fisse.reduce((s,f)=> s + (f.frequency==='annuale'? Number(f.amount)/12 : Number(f.amount)), 0) + conCanone.reduce((s,a)=>s+Number(a.canone),0);
+  const finAttivi = (db.finanziamenti||[]).filter(f=>!finStats(f).chiuso);
+  const mensile = db.fisse.reduce((s,f)=> s + (f.frequency==='annuale'? Number(f.amount)/12 : Number(f.amount)), 0) + conCanone.reduce((s,a)=>s+Number(a.canone),0) + finAttivi.reduce((s,f)=>s+Number(f.rata),0);
   let list = [...db.fisse];
   if(filt.q) list = list.filter(x=> matches(x.name, filt.q));
   document.getElementById('page-fisse').innerHTML = `
     <div class="topbar">
-      <div><div class="page-title">Spese fisse ricorrenti</div><div class="page-sub">${plur(db.fisse.length + conCanone.length,'voce','voci')} · impatto mensile ${euro(mensile)}</div></div>
+      <div><div class="page-title">Spese fisse ricorrenti</div><div class="page-sub">${plur(db.fisse.length + conCanone.length + finAttivi.length,'voce','voci')} · impatto mensile ${euro(mensile)}</div></div>
       <div class="topbar-actions"><button class="btn btn-primary" onclick="modalFissa()">+ Aggiungi</button></div>
     </div>
     ${searchBar('fisse','Cerca spesa fissa...')}
@@ -3206,6 +3233,14 @@ function renderFisse(){
         <div class="row-main"><div class="row-title">Canone ${esc(a.name)}</div><div class="row-sub">Mensile · il giorno ${a.canoneGiorno||1} di ogni mese · addebito automatico</div></div>
         <div class="row-amount" style="color:var(--amber)">${euro(Number(a.canone))}</div>
       </div>`).join('')}</div>` : ''}
+    ${finAttivi.length ? `
+    <div class="section-title">Rate dei finanziamenti <span class="count">si modificano da Finanziamenti</span></div>
+    <div class="list">${finAttivi.map(f=>{ const st = finStats(f); return `
+      <div class="row-item" style="cursor:pointer;" onclick="goToPage('finanziamenti')">
+        <div class="row-icon" style="background:${f.color||'#FF9F0A'}22; color:${f.color||'#FF9F0A'};">${esc(f.name.charAt(0).toUpperCase())}</div>
+        <div class="row-main"><div class="row-title">${esc(f.name)}</div><div class="row-sub">Rata ${st.pagate+1}/${f.numRate} · prossima ${fmtDate(st.prossima)} · fino a ${fmtDate(st.fine)}</div></div>
+        <div class="row-amount" style="color:var(--amber)">${euro(f.rata)}</div>
+      </div>`; }).join('')}</div>` : ''}
   `;
 }
 function toggleFissaFreq(freq){
@@ -3309,6 +3344,262 @@ function checkSpeseFisseAutomatiche(){
   });
 
   if(changed) saveDB();
+}
+
+/* ==================== FINANZIAMENTI ====================
+   Prestiti a rate (auto, telefono, prestito personale…). Per ognuno: rata mensile, numero di rate,
+   data della prima rata, rate già pagate. Se colleghi un conto, ogni rata viene addebitata da sola
+   alla sua scadenza (solo quelle che scadono DOPO il salvataggio: niente addebiti arretrati a sorpresa).
+   Le rate scadute e non segnate come pagate risultano "arretrate" e si segnano a mano.
+========================================================= */
+function addMesi(data, n){
+  const [y,m,d] = data.split('-').map(Number);
+  const ultimo = new Date(y, m-1+n+1, 0).getDate();
+  return dateKeyFromDate(new Date(y, m-1+n, Math.min(d, ultimo)));
+}
+function dataRata(f, k){ return addMesi(f.primaRata, k); }          // k = 0 per la prima rata
+function rateScadute(f){
+  if(!f.primaRata) return 0;
+  const oggi = oggiStr(); let n = 0;
+  while(n < f.numRate && dataRata(f, n) <= oggi) n++;
+  return n;
+}
+function finStats(f){
+  const pagate = Math.min(f.ratePagate||0, f.numRate||0);
+  const rimaste = Math.max(0, (f.numRate||0) - pagate);
+  const residuo = round2(rimaste * Number(f.rata||0));
+  const totale = round2((f.numRate||0) * Number(f.rata||0));
+  const interessi = Number(f.importo)>0 ? round2(totale - Number(f.importo)) : null;
+  const arretrate = Math.max(0, rateScadute(f) - pagate);
+  return { pagate, rimaste, residuo, totale, interessi, arretrate,
+    prossima: rimaste ? dataRata(f, pagate) : null,
+    fine: f.numRate ? dataRata(f, f.numRate-1) : null,
+    pct: f.numRate ? Math.round(pagate/f.numRate*100) : 0, chiuso: !rimaste };
+}
+function debitoResiduo(){ return round2((db.finanziamenti||[]).reduce((s,f)=>s+finStats(f).residuo,0)); }
+function rateMensiliAttive(){ return round2((db.finanziamenti||[]).filter(f=>!finStats(f).chiuso).reduce((s,f)=>s+Number(f.rata||0),0)); }
+function finArretrate(){ return (db.finanziamenti||[]).reduce((s,f)=>s+finStats(f).arretrate,0); }
+// rata con ammortamento alla francese (quella usata da banche e finanziarie)
+function rataFrancese(capitale, tanAnnuo, n){
+  if(!(capitale>0) || !(n>0)) return 0;
+  const i = (Number(tanAnnuo)||0)/100/12;
+  return round2(i ? capitale*i/(1-Math.pow(1+i,-n)) : capitale/n);
+}
+
+function checkFinanziamentiAutomatici(){
+  if(!db || !session) return;
+  let changed = false;
+  const oggi = oggiStr();
+  (db.finanziamenti||[]).forEach(f=>{
+    if(!f.accountId || !f.primaRata) return;
+    const acc = db.accounts.find(a=>a.id===f.accountId); if(!acc) return;
+    let guard = 0;
+    while((f.ratePagate||0) < f.numRate && guard < 120){
+      const d = dataRata(f, f.ratePagate||0);
+      if(d > oggi || d <= (f.autoDal||'')) break;     // non ancora scaduta, oppure arretrata (si segna a mano)
+      registraRata(f, acc.id, Number(f.rata), d);
+      changed = true; guard++;
+    }
+  });
+  if(changed) saveDB();
+}
+function registraRata(f, accountId, importo, data){
+  const n = (f.ratePagate||0) + 1;
+  f.ratePagate = n;
+  if(accountId && importo>0){
+    const acc = db.accounts.find(a=>a.id===accountId);
+    if(acc){
+      acc.balance = round2(Number(acc.balance) - importo);
+      db.movimenti.push({ id:uid(), type:'uscita', name:`Rata ${n}/${f.numRate} · ${f.name}`, amount:round2(importo), date:data, accountId, category:'altro', fromFinanziamento:f.id, rataNum:n });
+    }
+  }
+}
+
+function renderFinanziamenti(){
+  const el = document.getElementById('page-finanziamenti'); if(!el) return;
+  const list = [...(db.finanziamenti||[])].sort((a,b)=>{ const sa=finStats(a), sb=finStats(b); return (sa.chiuso-sb.chiuso) || (sa.prossima||'9999').localeCompare(sb.prossima||'9999'); });
+  const attivi = list.filter(f=>!finStats(f).chiuso);
+  const debito = debitoResiduo(), rate = rateMensiliAttive(), arr = finArretrate();
+  const prossime = attivi.map(f=>({ f, d:finStats(f).prossima })).filter(x=>x.d).sort((a,b)=>a.d.localeCompare(b.d));
+  const prox = prossime[0];
+  const interessiResidui = attivi.reduce((s,f)=>{ const st=finStats(f); return s + (st.interessi!==null ? st.interessi*st.rimaste/f.numRate : 0); },0);
+  const T = computeTotals();
+  el.innerHTML = `
+    <div class="topbar">
+      <div><div class="page-title">Finanziamenti</div><div class="page-sub">${plur(attivi.length,'finanziamento attivo','finanziamenti attivi')}${list.length>attivi.length?` · ${list.length-attivi.length} conclusi`:''}${debito?` · patrimonio netto ${euro(T.patrimonio - debito)}`:''}</div></div>
+      <div class="topbar-actions"><button class="btn btn-primary" onclick="modalFinanziamento()">+ Nuovo finanziamento</button></div>
+    </div>
+    ${list.length ? `
+    <div class="grid grid-4" style="margin-bottom:20px;">
+      <div class="card"><div class="card-title">Debito residuo</div><div class="stat-value" style="font-size:20px; color:var(--coral-soft);">${euro(debito)}</div><div class="stat-trend" style="color:var(--text-faint)">rate ancora da pagare</div></div>
+      <div class="card"><div class="card-title">Rate al mese</div><div class="stat-value" style="font-size:20px;">${euro(rate)}</div><div class="stat-trend" style="color:var(--text-faint)">${plur(attivi.length,'finanziamento','finanziamenti')}</div></div>
+      <div class="card"><div class="card-title">Prossima rata</div><div class="stat-value" style="font-size:20px;">${prox?fmtDate(prox.d):'—'}</div><div class="stat-trend" style="color:var(--text-faint)">${prox?`${euro(prox.f.rata)} · ${esc(prox.f.name)}`:'nessuna'}</div></div>
+      <div class="card"><div class="card-title">Interessi ancora da pagare</div><div class="stat-value" style="font-size:20px; color:var(--amber);">${interessiResidui?'≈ '+euro(interessiResidui):'—'}</div><div class="stat-trend" style="color:var(--text-faint)">${interessiResidui?'stima sulle rate rimaste':'inserisci l\'importo finanziato'}</div></div>
+    </div>` : ''}
+    ${arr ? `<div class="import-banner" style="background:var(--coral-dim); border-color:rgba(255,69,58,0.35);"><div><b>${plur(arr,'rata arretrata','rate arretrate')}</b><span>Rate già scadute non segnate come pagate: se le hai pagate, segnale con "Segna pagata".</span></div></div>` : ''}
+    <div class="grid grid-2">
+      ${list.length ? list.map(finCardHtml).join('') : `<div class="card" style="grid-column:1/-1;">${emptyState('Nessun finanziamento. Aggiungine uno: rata, numero di rate e data della prima rata, il resto lo calcola l\'app.')}</div>`}
+    </div>`;
+}
+function finCardHtml(f){
+  const st = finStats(f);
+  const acc = f.accountId ? db.accounts.find(a=>a.id===f.accountId) : null;
+  const col = f.color || '#FF9F0A';
+  return `<div class="card fin-card ${st.chiuso?'fin-chiuso':''}">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+      <div style="display:flex; gap:12px; align-items:center; min-width:0;">
+        <div class="row-icon" style="background:${col}22; color:${col};">${esc((f.name||'?').charAt(0).toUpperCase())}</div>
+        <div style="min-width:0;"><div class="row-title">${esc(f.name)}</div><div class="row-sub">${f.ente?esc(f.ente)+' · ':''}${euro(f.rata)}/mese × ${f.numRate}</div></div>
+      </div>
+      <div class="row-actions">
+        <button class="icon-btn" title="Modifica" onclick="modalFinanziamento('${f.id}')">${ICO_EDIT}</button>
+        <button class="icon-btn btn-danger" title="Elimina" onclick="deleteItem('finanziamenti','${f.id}')">${ICO_TRASH}</button>
+      </div>
+    </div>
+    <div class="fin-numbers">
+      <div><span>Debito residuo</span><b style="color:${st.chiuso?'var(--mint)':'var(--coral-soft)'}">${st.chiuso?'Saldato':euro(st.residuo)}</b></div>
+      <div><span>Rate</span><b>${st.pagate}/${f.numRate}</b></div>
+      <div><span>${st.chiuso?'Concluso':'Fine'}</span><b>${st.fine?fmtDate(st.fine):'—'}</b></div>
+    </div>
+    <div class="progress-track"><div class="progress-fill" style="width:${st.pct}%; background:${st.chiuso?'var(--mint)':col};"></div></div>
+    <div class="fin-meta">
+      ${st.chiuso ? `<span class="pv-badge green">Tutte le rate pagate</span>` : `<span class="pv-badge ${st.arretrate?'red':'gray'}">${st.arretrate?plur(st.arretrate,'rata arretrata','rate arretrate'):`Prossima ${fmtDate(st.prossima)}`}</span>`}
+      <span class="pv-badge gray">${acc?`Addebito automatico da ${esc(acc.name)}`:'Pagamento manuale'}</span>
+      ${st.interessi!==null ? `<span class="pv-badge ${st.interessi>0?'amber':'gray'}">Interessi totali ${euro(st.interessi)}</span>` : ''}
+      ${Number(f.tan)>0 ? `<span class="pv-badge gray">TAN ${fmtPct(f.tan)}</span>` : ''}
+    </div>
+    ${f.note ? `<div class="row-sub" style="white-space:normal; margin-top:8px;">${esc(f.note)}</div>` : ''}
+    <div class="fin-actions">
+      ${!st.chiuso ? `<button class="btn btn-sm ${st.arretrate||!acc?'btn-primary':''}" onclick="modalPagaRata('${f.id}')">Segna pagata la rata ${st.pagate+1}</button>` : ''}
+      ${st.pagate ? `<button class="btn btn-sm" onclick="annullaUltimaRata('${f.id}')">Annulla l'ultima</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function modalFinanziamento(id){
+  const f = id ? (db.finanziamenti||[]).find(x=>x.id===id) : null;
+  if(id && !f) return;
+  const oggi = oggiStr();
+  const accOpt = `<option value="">Nessuno (segno io le rate)</option>` + db.accounts.map(a=>`<option value="${a.id}" ${f&&f.accountId===a.id?'selected':''}>${esc(a.name)}</option>`).join('');
+  openModal(`
+    <h3>${f?'Modifica finanziamento':'Nuovo finanziamento'}</h3>
+    <div class="field"><label>Nome</label><input id="fin-name" value="${esc(f?f.name:'')}" placeholder="Es. Finanziamento auto, iPhone a rate"></div>
+    <div class="field"><label>Banca / finanziaria (facoltativo)</label><input id="fin-ente" value="${esc(f?f.ente||'':'')}" placeholder="Es. Findomestic, Agos, la tua banca"></div>
+    <div class="field-row">
+      <div class="field"><label>Importo finanziato (€)</label><input id="fin-importo" type="text" inputmode="decimal" autocomplete="off" value="${f&&Number(f.importo)>0?f.importo:''}" placeholder="Facoltativo" oninput="anteprimaFin()"></div>
+      <div class="field"><label>TAN annuo (%)</label><input id="fin-tan" type="text" inputmode="decimal" autocomplete="off" value="${f&&Number(f.tan)>0?f.tan:''}" placeholder="Facoltativo" oninput="anteprimaFin()"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Rata mensile (€)</label><input id="fin-rata" type="text" inputmode="decimal" autocomplete="off" value="${f?f.rata:''}" placeholder="0,00" oninput="anteprimaFin()"></div>
+      <div class="field"><label>Numero di rate</label><input id="fin-num" type="number" min="1" max="600" step="1" value="${f?f.numRate:''}" placeholder="Es. 48" oninput="suggerisciRatePagate(); anteprimaFin()"></div>
+    </div>
+    <div class="quick-amounts" style="margin:-6px 0 14px;"><button type="button" onclick="calcolaRataFin()">Calcola la rata da importo, TAN e numero di rate</button></div>
+    <div class="field-row">
+      <div class="field"><label>Data della prima rata</label><input id="fin-prima" type="date" value="${f?f.primaRata:oggi}" onchange="suggerisciRatePagate(); anteprimaFin()"></div>
+      <div class="field"><label>Rate già pagate</label><input id="fin-pagate" type="number" min="0" step="1" value="${f?f.ratePagate||0:0}" oninput="this.dataset.toccato='1'; anteprimaFin()"></div>
+    </div>
+    <div class="field"><label>Conto da cui viene addebitata</label><select id="fin-account">${accOpt}</select></div>
+    <div class="acc-form-hint" id="fin-anteprima"></div>
+    <div class="field"><label>Note (facoltativo)</label><input id="fin-note" value="${esc(f?f.note||'':'')}" placeholder="Es. estinzione anticipata possibile dal 2027"></div>
+    <p style="color:var(--text-faint); font-size:11.5px; margin:4px 0 0;">Con un conto collegato ogni rata viene registrata in "Movimenti" da sola il giorno della scadenza, a partire dalla prossima. Le rate già scadute e non segnate restano "arretrate" finché non le segni tu.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="saveFinanziamento('${id||''}')">${f?'Salva':'Aggiungi'}</button>
+    </div>
+  `);
+  if(!f) suggerisciRatePagate();
+  anteprimaFin();
+}
+function suggerisciRatePagate(){
+  const el = document.getElementById('fin-pagate'); if(!el || el.dataset.toccato) return;
+  const prima = document.getElementById('fin-prima').value;
+  const num = parseInt(document.getElementById('fin-num').value)||0;
+  if(!prima || !num) return;
+  el.value = rateScadute({ primaRata:prima, numRate:num });
+}
+function calcolaRataFin(){
+  const imp = parseNum(document.getElementById('fin-importo').value);
+  const tan = parsePct(document.getElementById('fin-tan').value);
+  const n = parseInt(document.getElementById('fin-num').value)||0;
+  if(!(imp>0) || !n) return toast('Inserisci importo finanziato e numero di rate (il TAN se c\'è).');
+  document.getElementById('fin-rata').value = rataFrancese(imp, tan, n).toFixed(2).replace('.',',');
+  anteprimaFin();
+}
+function anteprimaFin(){
+  const box = document.getElementById('fin-anteprima'); if(!box) return;
+  const rata = parseNum(document.getElementById('fin-rata').value);
+  const n = parseInt(document.getElementById('fin-num').value)||0;
+  const imp = parseNum(document.getElementById('fin-importo').value);
+  const pagate = Math.min(n, Math.max(0, parseInt(document.getElementById('fin-pagate').value)||0));
+  const prima = document.getElementById('fin-prima').value;
+  if(!(rata>0) || !n){ box.textContent=''; return; }
+  const totale = rata*n;
+  const fine = prima ? fmtDate(addMesi(prima, n-1)) : '—';
+  box.innerHTML = `Restituisci in tutto <b>${euro(totale)}</b>${imp>0?` (interessi e spese <b>${euro(totale-imp)}</b>)`:''} · ultima rata <b>${fine}</b> · ancora da pagare <b>${euro(rata*(n-pagate))}</b>.`;
+}
+function saveFinanziamento(id){
+  const name = document.getElementById('fin-name').value.trim();
+  const rata = round2(parseNum(document.getElementById('fin-rata').value));
+  const numRate = parseInt(document.getElementById('fin-num').value)||0;
+  const primaRata = document.getElementById('fin-prima').value;
+  if(!name) return toast('Dai un nome al finanziamento.');
+  if(!(rata>0)) return toast('Inserisci la rata mensile.');
+  if(!(numRate>0)) return toast('Inserisci il numero di rate.');
+  if(!primaRata) return toast('Inserisci la data della prima rata.');
+  const dati = {
+    name, rata, numRate, primaRata,
+    ente: document.getElementById('fin-ente').value.trim(),
+    importo: round2(parseNum(document.getElementById('fin-importo').value)),
+    tan: parsePct(document.getElementById('fin-tan').value),
+    ratePagate: Math.min(numRate, Math.max(0, parseInt(document.getElementById('fin-pagate').value)||0)),
+    accountId: document.getElementById('fin-account').value || null,
+    note: document.getElementById('fin-note').value.trim(),
+    autoDal: oggiStr(),          // addebiti automatici solo per le rate che scadono da domani in poi
+  };
+  if(!db.finanziamenti) db.finanziamenti = [];
+  if(id){ const f = db.finanziamenti.find(x=>x.id===id); if(!f) return; Object.assign(f, dati); }
+  else db.finanziamenti.push({ id:uid(), color: ['#FF9F0A','#BF5AF2','#64D2FF','#FF453A'][db.finanziamenti.length%4], ...dati });
+  saveDB(); closeModal(); renderAll(); toast(id?'Finanziamento aggiornato.':'Finanziamento aggiunto.');
+}
+function modalPagaRata(id){
+  const f = (db.finanziamenti||[]).find(x=>x.id===id); if(!f) return;
+  const st = finStats(f); if(st.chiuso) return;
+  const n = st.pagate+1, scad = dataRata(f, st.pagate);
+  openModal(`
+    <h3>Rata ${n} di ${f.numRate}</h3>
+    <p class="modal-lead"><b>${esc(f.name)}</b> · scadenza ${fmtDate(scad)}</p>
+    <div class="field-row">
+      <div class="field"><label>Importo (€)</label><input id="pr-importo" type="text" inputmode="decimal" autocomplete="off" value="${Number(f.rata).toFixed(2).replace('.',',')}"></div>
+      <div class="field"><label>Data</label><input id="pr-data" type="date" value="${scad<oggiStr()?scad:oggiStr()}"></div>
+    </div>
+    <div class="field"><label>Pagata dal conto</label><select id="pr-account">
+      ${db.accounts.map(a=>`<option value="${a.id}" ${f.accountId===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}
+      <option value="" ${!db.accounts.length?'selected':''}>Già scalata dal saldo (non registrare il movimento)</option>
+    </select></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="confermaPagaRata('${id}')">Segna pagata</button>
+    </div>`);
+}
+function confermaPagaRata(id){
+  const f = (db.finanziamenti||[]).find(x=>x.id===id); if(!f) return;
+  const imp = round2(parseNum(document.getElementById('pr-importo').value));
+  const data = document.getElementById('pr-data').value || oggiStr();
+  const accId = document.getElementById('pr-account').value || null;
+  if(accId && !(imp>0)) return toast('Inserisci un importo valido.');
+  registraRata(f, accId, imp, data);
+  saveDB(); closeModal(); renderAll();
+  toast(finStats(f).chiuso ? `"${f.name}" saldato: tutte le rate pagate 🎉` : `Rata ${f.ratePagate}/${f.numRate} segnata.`);
+}
+function annullaUltimaRata(id){
+  const f = (db.finanziamenti||[]).find(x=>x.id===id); if(!f || !f.ratePagate) return;
+  const n = f.ratePagate;
+  const mov = db.movimenti.find(m=>m.fromFinanziamento===f.id && m.rataNum===n);
+  if(mov){ applyMovimentoEffect(mov, -1); db.movimenti = db.movimenti.filter(m=>m!==mov); }
+  f.ratePagate = n-1;
+  // questa rata non deve essere ri-addebitata in automatico subito dopo: diventa da segnare a mano
+  const d = dataRata(f, n-1); if(d > (f.autoDal||'')) f.autoDal = d;
+  saveDB(); renderAll(); toast(`Rata ${n} annullata${mov?', importo restituito al conto':''}.`);
 }
 
 /* ==================== TASK — To-Do list con sotto-task ==================== */
@@ -4055,7 +4346,7 @@ async function confermaEliminaAccount(){
 }
 
 /* ==================== ELIMINAZIONE (con annulla) ==================== */
-const NOMI_COLLEZIONE = { accounts:'Conto', mancanti:'Voce', fisse:'Spesa fissa', tasks:'Task', acquisti:'Articolo', preventivati:'Preventivo' };
+const NOMI_COLLEZIONE = { finanziamenti:'Finanziamento', accounts:'Conto', mancanti:'Voce', fisse:'Spesa fissa', tasks:'Task', acquisti:'Articolo', preventivati:'Preventivo' };
 function deleteItem(collection, id){
   const arr = db[collection]; if(!Array.isArray(arr)) return;
   const idx = arr.findIndex(x=>x.id===id); if(idx<0) return;

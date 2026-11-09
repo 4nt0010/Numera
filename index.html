@@ -227,6 +227,8 @@ button.kpi-cell:hover{ background:rgba(255,255,255,0.03); }
 .kpi-value{ font-family:var(--font-mono); font-size:21px; font-weight:800; letter-spacing:-0.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .kpi-trend{ display:inline-flex; align-items:center; gap:3px; flex-shrink:0; font-size:11px; font-weight:700; padding:2px 7px 2px 5px; border-radius:999px; }
 .kpi-main .kpi-value{ color:var(--mint-strong); }
+.kpi-sub{ font-size:12px; font-weight:600; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:-2px; }
+.kpi-sub b{ font-family:var(--font-mono); color:var(--text); font-weight:700; }
 .kpi-prev .kpi-value{ color:var(--blue-soft); }
 .kpi-missing .kpi-value{ color:var(--coral-soft); }
 .main.dash-active .kpi-bar, .main.sim-active .kpi-bar{ display:none; }
@@ -363,6 +365,12 @@ button.kpi-cell:hover{ background:rgba(255,255,255,0.03); }
 .acc-lock-pill .ico-lock{ margin-right:0; }
 .card.acc-vincolato .stat-value{ color:var(--text-dim); }
 .dash-hero-patrimonio, .m-patrimonio{ font-size:12.5px; color:var(--text-dim); margin-top:4px; font-weight:600; }
+.fin-numbers{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:10px; margin:16px 0 10px; }
+.fin-numbers span{ display:block; font-size:11px; color:var(--text-faint); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.fin-numbers b{ display:block; font-family:var(--font-mono); font-size:16px; font-weight:800; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fin-meta{ display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+.fin-actions{ display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+.fin-card.fin-chiuso{ opacity:.7; }
 .acc-extra{ margin-top:12px; padding-top:10px; border-top:1px solid var(--border-soft); display:flex; flex-direction:column; gap:7px; }
 .acc-extra-row{ display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:8px; align-items:baseline; font-size:12.5px; }
 .acc-extra-row span{ color:var(--text-faint); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -862,6 +870,7 @@ button.pv-sum:hover{ border-color:rgba(255,255,255,0.14); }
   .kpi-icon-bubble{ display:none; }
   .kpi-label{ font-size:9.5px; letter-spacing:0.04em; }
   .kpi-value{ font-size:15px; }
+  .kpi-sub{ font-size:10.5px; margin-top:0; }
   .kpi-trend{ font-size:9.5px; padding:1px 5px; }
   .main.dash-active .kpi-bar{ display:none; }
 
@@ -1105,6 +1114,11 @@ button.pv-sum:hover{ border-color:rgba(255,255,255,0.14); }
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 2l4 4-4 4M3 12v-2a4 4 0 014-4h14M7 22l-4-4 4-4M21 12v2a4 4 0 01-4 4H3"/></svg>
         Spese fisse
       </a>
+      <a class="nav-item" data-page="finanziamenti">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 14h3M8 17h6"/></svg>
+        Finanziamenti
+        <span class="nav-badge" id="badge-finanziamenti"></span>
+      </a>
       <a class="nav-item" data-page="acquisti">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2l1.5 4M18 2l-1.5 4M3.5 8h17l-1.6 9.6a2 2 0 01-2 1.7H7.1a2 2 0 01-2-1.7L3.5 8z"/><circle cx="9" cy="21" r="1"/><circle cx="16" cy="21" r="1"/></svg>
         Lista acquisti
@@ -1142,6 +1156,7 @@ button.pv-sum:hover{ border-color:rgba(255,255,255,0.14); }
           <span class="kpi-value" id="kpi-attuale">€ 0,00</span>
           <span class="kpi-trend" id="kpi-trend-attuale" style="display:none;"></span>
         </div>
+        <div class="kpi-sub" id="kpi-attuale-sub" style="display:none;"></div>
       </button>
       <button class="kpi-cell kpi-prev" onclick="goToPage('preventivati')">
         <div class="kpi-cell-header">
@@ -1163,6 +1178,7 @@ button.pv-sum:hover{ border-color:rgba(255,255,255,0.14); }
           <span class="kpi-label">Totale previsto</span>
         </div>
         <div class="kpi-value-row"><span class="kpi-value" id="kpi-totale">€ 0,00</span></div>
+        <div class="kpi-sub" id="kpi-totale-sub" style="display:none;"></div>
       </div>
     </div>
 
@@ -1177,6 +1193,7 @@ button.pv-sum:hover{ border-color:rgba(255,255,255,0.14); }
       <section class="page" id="page-mancanti"></section>
       <section class="page" id="page-task"></section>
       <section class="page" id="page-fisse"></section>
+      <section class="page" id="page-finanziamenti"></section>
       <section class="page" id="page-clienti"></section>
       <section class="page" id="page-acquisti"></section>
       <section class="page" id="page-simulatore"></section>
